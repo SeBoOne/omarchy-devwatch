@@ -259,7 +259,7 @@ Panel {
               required property int index
 
               hasCursor: root.cursorActive && index === root.focusedIndex
-              current: modelData.svc.running
+              current: modelData.svc.running === true
               bordered: false
               foreground: root.foreground
               accent: root.accent

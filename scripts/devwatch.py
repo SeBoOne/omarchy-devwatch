@@ -78,11 +78,13 @@ def find_projects():
 def port_open(port):
     if not port:
         return None
-    try:
-        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.3):
-            return True
-    except OSError:
-        return False
+    for host in ("127.0.0.1", "::1"):
+        try:
+            with socket.create_connection((host, int(port)), timeout=0.3):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def compose_cmd(proj_path, svc):
