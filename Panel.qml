@@ -347,7 +347,12 @@ Panel {
 
                   Text {
                     id: statusText
-                    text: modelData.svc.detail || ""
+                    text: {
+                      var parts = []
+                      if (modelData.svc.detail) parts.push(modelData.svc.detail)
+                      if (modelData.svc.port) parts.push(":" + modelData.svc.port + (modelData.svc.port_open === true ? " ✓" : " ✗"))
+                      return parts.join(" · ")
+                    }
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
