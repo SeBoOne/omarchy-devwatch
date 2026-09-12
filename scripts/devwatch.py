@@ -87,6 +87,36 @@ def port_open(port):
     return False
 
 
+def adopt_port_owner(port):
+    """Find the PID listening on <port> (any address, IPv4+IPv6) and verify
+    its /proc identity. Returns (pid, starttime) or None."""
+    try:
+        res = subprocess.run(["ss", "-H", "-ltnp"], capture_output=True,
+                             text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    needle = f":{int(port)} "
+    for line in res.stdout.splitlines():
+        if needle not in line:
+            continue
+        idx = line.find("users:((")
+        if idx == -1:
+            continue
+        for chunk in line[idx:].split(","):
+            chunk = chunk.strip().strip('"))(( ')
+            if chunk.startswith("pid="):
+                try:
+                    pid = int(chunk[4:])
+                except ValueError:
+                    continue
+                try:
+                    starttime = open(f"/proc/{pid}/stat", "rb").read().split()[21].decode()
+                    return pid, starttime
+                except (OSError, IndexError):
+                    continue
+    return None
+
+
 def compose_cmd(proj_path, svc):
     cmd = ["docker", "compose"]
     if svc.get("file"):
@@ -194,6 +224,20 @@ def do_start(proj_path, svc):
         return subprocess.run(["systemctl", "--user", "start", svc.get("unit", "")]).returncode == 0
     if stype == "cmd":
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
+        port = svc.get("port")
+        # Port schon von irgendeinem Prozess belegt? (z.B. von einer anderen
+        # Sitzung manuell gestartet) → den Prozess adoptieren statt einen
+        # Zombie-Eintrag zu erzeugen, der "Failed to listen" produziert.
+        if port and port_open(port):
+            adopted = adopt_port_owner(port)
+            if adopted:
+                pid, start_time = adopted
+                with open(pidfile, "w") as f:
+                    f.write(str(pid))
+                print(f"Port {port} bereits belegt — Prozess {pid} übernommen.", file=sys.stderr)
+                return True
+            print(f"Port {port} belegt, Besitzer nicht identifizierbar.", file=sys.stderr)
+            return False
         # Already running?
         try:
             with open(pidfile) as f:
