@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# setup-ufw-sudoers.sh — NOPASSWD sudo for ufw (TEMPLATE, not auto-executed)
+# setup-ufw-sudoers.sh — configure the NOPASSWD sudo rule for ufw
 #
-# Approach: devwatch.py runs for services with "firewall": true
+# Purpose: devwatch.py runs for services with "firewall": true
 #   sudo -n ufw allow  <port>       (on start, before process start)
 #   sudo -n ufw delete allow <port> (on stop, AFTER the process ended)
 # To work without a password prompt (the Omarchy bar cannot type a password),
 # devwatch needs a narrow NOPASSWD rule ONLY for ufw.
 #
-# >>> THIS SCRIPT IS NOT EXECUTED BY THE AGENT <<<
-# It is a template for the operator (root). It needs ROOT privileges
-# (visudo/sudoers write) and is therefore run manually:
+# Run as root (sudoers write):
 #   sudo bash scripts/setup-ufw-sudoers.sh
 #
 # IMPORTANT — SECURITY:
@@ -31,33 +29,47 @@ if [[ -z "${SUDO_USER:-}" ]]; then
 fi
 SUDOERS_LINE="${SUDO_USER} ALL=(root) NOPASSWD: /usr/sbin/ufw"
 
-# Only continue with sufficient privileges — the script MUST run as root
-# (writes visudo/sudoers.d). Refuses if the caller is not root.
+# The script MUST run as root (writes /etc/sudoers.d).
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Error: this setup script requires ROOT privileges." >&2
   echo "Run it with:  sudo bash $0" >&2
   exit 1
 fi
 
-# Validation after the entry, but stepwise: only check the real command that can
-# succeed. `sudo -n ufw status` only needs the sudo rule, so a plain status
-# query works as a functional check of the rule.
+# Write the rule only if the file is absent or differs, so we never clobber an
+# existing file the operator may have edited manually.
+if [[ -f "${SUDOERS_FILE}" ]]; then
+  if grep -qF -- "${SUDOERS_LINE}" "${SUDOERS_FILE}"; then
+    echo "Rule already present in ${SUDOERS_FILE}; skipping write."
+  else
+    echo "Updating ${SUDOERS_FILE} (existing file lacks the rule)."
+    echo "${SUDOERS_LINE}" >> "${SUDOERS_FILE}"
+  fi
+else
+  echo "Creating ${SUDOERS_FILE}."
+  echo "${SUDOERS_LINE}" > "${SUDOERS_FILE}"
+fi
 
-echo "Planned sudoers rule:"
-echo "  ${SUDOERS_LINE}"
-echo
+# sudoers files must be root:root 0440 — otherwise visudo/sudo warn ("world-
+# writable" / bad permissions) on every subsequent run. Set it explicitly.
+echo "Setting permissions root:root 0440 on ${SUDOERS_FILE}."
+chown root:root "${SUDOERS_FILE}"
+chmod 0440 "${SUDOERS_FILE}"
 
-# Security note: the goal is a MINIMAL rule. If the user name differs or a
-# different command path applies, adjust accordingly (visudo).
-# Never append wildcards to the command path.
-echo "Review and adjust if needed, then create it with:"
-echo "  sudo visudo -f ${SUDOERS_FILE}"
-echo "and validate with:"
-echo "  sudo visudo -c"
-echo
+# Validate the resulting sudoers file (catches syntax errors before they lock
+# sudo out). A failed validation exits non-zero and shows the offending line.
+echo "Validating sudoers syntax…"
+visudo -c -f "${SUDOERS_FILE}"
+visudo -c >/dev/null 2>&1 || { echo "visudo reported system-wide issues — review." >&2; }
 
-echo "Notes:"
-echo " 1. This rule allows NOPASSWD EXCLUSIVELY for /usr/sbin/ufw."
-echo " 2. Do not add other commands to this file."
-echo " 3. After creating it, devwatch can be tested with:"
-echo "    sudo -n ufw status"
+# Functional check: the rule should let ufw run without a password prompt.
+echo "Testing: sudo -n ufw status"
+if sudo -n ufw status >/dev/null 2>&1; then
+  echo "OK — ufw is accessible without a password."
+else
+  echo "Note: 'sudo -n ufw status' still prompted/failed (exit $?)." >&2
+  echo "This means the rule is not active yet or ufw is not configured." >&2
+  echo "start/stop of devwatch services still works — only the automatic" >&2
+  echo "port open/close is skipped (honest status, no failure)." >&2
+  exit 1
+fi

@@ -21,10 +21,9 @@ omarchy plugin disable sebo.devwatch      # keeps files, just hides the widget
 omarchy plugin remove sebo.devwatch       # uninstall (removes the plugin folder)
 ```
 
-**Firewall support (optional):** The `"firewall": true` field (see below) uses
-`ufw`. UFW is part of the Omarchy base installation
-(`install/omarchy-base.packages`), so it is already present — no setup step
-needed.
+The `"firewall": true` field (see below) is fully optional — see
+[Firewall support (optional)](#firewall-support-optional) for how it works and
+how to enable it. Without the setup, services start and stop normally.
 
 ## Declaring services
 
@@ -133,7 +132,8 @@ binding to `~/.config/hypr/bindings.lua` (no extra plugin needed):
 o.bind("SUPER + SHIFT + D", "DevWatch", "omarchy-shell shell toggle sebo.devwatch")
 ```
 
-If the key is already bound by Omarchy defaults pick another key if u dont want to change it, else:
+If the key is already bound by Omarchy defaults, either pick another key or
+unbind it first:
 
 ```lua
 hl.unbind("SUPER + SHIFT + D")
@@ -153,3 +153,39 @@ python3 scripts/devwatch.py restart <project> <service>
 python3 scripts/devwatch.py groupstart <project>  # start all services of the group
 python3 scripts/devwatch.py groupstop  <project>  # stop only the running ones of the group
 ```
+
+## Firewall support (optional)
+
+The `"firewall": true` field on a service (only applies when `port` is set)
+opens the port via UFW on start and closes it again on stop:
+
+- On start:  `sudo -n ufw allow <port>` (before the process starts)
+- On stop:   `sudo -n ufw delete allow <port>` (after the process ended)
+
+**This is fully optional.** Without the firewall setup the services still start
+and stop normally — only the automatic UFW port open/close is skipped, and the
+status simply does not report a firewall rule. No error is shown.
+
+### Enable it
+
+1. UFW is part of the Omarchy base installation, so nothing needs installing.
+2. Since the Omarchy bar cannot type a password, DevWatch calls `ufw` via
+   `sudo -n`. That needs a narrow NOPASSWD rule limited to `ufw` only. Run the
+   setup once as root:
+
+   ```bash
+   sudo bash scripts/setup-ufw-sudoers.sh
+   ```
+
+   The script writes `/etc/sudoers.d/devwatch-ufw` with the single rule
+   `sebo ALL=(root) NOPASSWD: /usr/sbin/ufw` (your user instead of `sebo`),
+   then chmods it to root:root 0440, validates it with `visudo -c`, and runs a
+   `sudo -n ufw status` check. It never creates a blanket NOPASSWD rule.
+
+3. That's it. Services with `"firewall": true` + `port` now open/close their
+   port automatically. Verify with `ufw status` after a start/stop.
+
+Security note: the sudo rule is deliberately limited to the single command
+`/usr/sbin/ufw` — it cannot be used to run arbitrary commands. If you prefer to
+not grant this, simply leave the firewall field off: everything else keeps
+working.
