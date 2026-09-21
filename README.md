@@ -18,11 +18,11 @@ Entwicklung: in `~/Projects/devwatch/` editieren, dann die geänderten Dateien
 nach `~/.config/omarchy/plugins/sebo.devwatch/` kopieren (Hot-Reload aktiv).
 
 **Firewall-Unterstützung (optional):** Die Funktion `"firewall": true` (siehe
-unten) nutzt `ufw`. Das ist ein Ubuntu/Debian-Tool und auf Arch/Omarchy nicht
-vorinstalliert — dort erst installieren:
+unten) nutzt `ufw`. Omarchy bringt ufw nicht als Pflichtbestandteil mit; ob es
+installiert ist, prüfst du mit `which ufw`. Fehlt es, installierst du es:
 
 ```bash
-sudo pacman -S ufw
+sudo pacman -S ufw   # bzw. das Paket deiner Distribution
 ```
 
 ## Dienste deklarieren
