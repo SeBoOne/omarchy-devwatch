@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# setup-ufw-sudoers.sh — configure the NOPASSWD sudo rule for ufw
+# setup-ufw-sudoers.sh — configure / remove the NOPASSWD sudo rule for ufw
 #
 # Purpose: devwatch.py runs for services with "firewall": true
 #   sudo -n ufw allow  <port>       (on start, before process start)
@@ -7,8 +7,12 @@
 # To work without a password prompt (the Omarchy bar cannot type a password),
 # devwatch needs a narrow NOPASSWD rule ONLY for ufw.
 #
-# Run as root (sudoers write):
-#   sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh
+# Usage (as root):
+#   Install:  sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh
+#   Remove:   sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh --uninstall
+# Run --uninstall BEFORE `omarchy plugin remove sebo.devwatch` (the plugin folder,
+# including this script, is deleted afterwards). Omarchy has no post-remove hook,
+# so removing the rule is a manual extra step.
 #
 # IMPORTANT — SECURITY:
 # * It NEVER creates a blanket "ALL=(ALL) NOPASSWD: ALL".
@@ -19,6 +23,37 @@
 set -euo pipefail
 
 SUDOERS_FILE="/etc/sudoers.d/devwatch-ufw"
+
+# The script MUST run as root (writes /etc/sudoers.d).
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Error: this setup script requires ROOT privileges." >&2
+  echo "Run it with:  sudo bash $0 [--uninstall]" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Uninstall: remove the sudoers rule we created. Independent of SUDO_USER.
+if [[ "${1:-}" == "--uninstall" ]]; then
+  if [[ -f "${SUDOERS_FILE}" ]]; then
+    if ! grep -qF "NOPASSWD: /usr/sbin/ufw" "${SUDOERS_FILE}"; then
+      echo "No ufw NOPASSWD rule found in ${SUDOERS_FILE}; leaving it untouched."
+    else
+      echo "Removing ${SUDOERS_FILE} (our ufw NOPASSWD rule)."
+      rm -f "${SUDOERS_FILE}"
+      echo "Validating sudoers syntax after removal…"
+      visudo -c
+    fi
+  else
+    echo "${SUDOERS_FILE} does not exist — nothing to remove."
+  fi
+  echo "Done. You can now remove the plugin:"
+  echo "  omarchy plugin remove sebo.devwatch"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Install
+
 # The exact entry — do NOT generalize. Without COMMAND arguments this line only
 # allows "ufw" and its arguments, not sudo with arbitrary commands.
 # The user name is resolved dynamically (the one running `sudo bash ...`),
@@ -28,13 +63,6 @@ if [[ -z "${SUDO_USER:-}" ]]; then
   exit 1
 fi
 SUDOERS_LINE="${SUDO_USER} ALL=(root) NOPASSWD: /usr/sbin/ufw"
-
-# The script MUST run as root (writes /etc/sudoers.d).
-if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Error: this setup script requires ROOT privileges." >&2
-  echo "Run it with:  sudo bash $0" >&2
-  exit 1
-fi
 
 # Write the rule only if the file is absent or differs, so we never clobber an
 # existing file the operator may have edited manually.

@@ -18,6 +18,10 @@ Disable or remove:
 
 ```bash
 omarchy plugin disable sebo.devwatch      # keeps files, just hides the widget
+
+# If you set up the optional UFW rule, remove it BEFORE uninstalling
+# (Omarchy has no post-remove hook, so this is a manual step):
+sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh --uninstall
 omarchy plugin remove sebo.devwatch       # uninstall (removes the plugin folder)
 ```
 
@@ -192,3 +196,7 @@ Security note: the sudo rule is deliberately limited to the single command
 `/usr/sbin/ufw` — it cannot be used to run arbitrary commands. If you prefer to
 not grant this, simply leave the firewall field off: everything else keeps
 working.
+
+To remove the rule again (e.g. before uninstalling the plugin), run the setup
+script with `--uninstall`; see the removal command in the
+[Installation](#installation) section.
