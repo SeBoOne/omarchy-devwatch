@@ -188,10 +188,17 @@ def ufw_allowed(port):
     if res.returncode != 0:
         err = (res.stderr or res.stdout).strip()
         return None, f"ufw status error ({res.returncode}): {err}"
-    needle = f":{port}"
+    # ufw 'status numbered' druckt den Port als eigenes Token (ggf. mit /proto),
+    # z.B. "[ 1] 8090/tcp  ALLOW IN  Anywhere" oder "[ 1] 8090  ALLOW ...".
+    # NICHT mit führendem Doppelpunkt suchen (hoert auf ss-:port-Syntax) — sonst
+    # nie gematcht und der Port steht auf 'fw ✕', obwohl er offen ist.
+    p = str(port)
     for line in res.stdout.splitlines():
-        if needle in line and ("ALLOW" in line.upper() or "ALLOW IN" in line.upper()):
-            return True, "ufw open"
+        if "ALLOW" not in line.upper():
+            continue
+        for token in line.split():
+            if token == p or token.startswith(p + "/"):
+                return True, "ufw open"
     return False, "ufw closed"
 
 
