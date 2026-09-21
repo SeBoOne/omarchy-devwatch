@@ -11,9 +11,7 @@ Start/Stop/Neustart direkt aus der Leiste.
 ## Installation
 
 ```bash
-cp -r devwatch ~/.config/omarchy/plugins/sebo.devwatch
-omarchy-shell shell rescanPlugins
-omarchy plugin enable sebo.devwatch --section right
+omarchy plugin add https://github.com/SeBoOne/omarchy-devwatch.git --enable
 ```
 
 Entwicklung: in `~/Projects/devwatch/` editieren, dann die geänderten Dateien
