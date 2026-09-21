@@ -80,8 +80,29 @@ Gruppen-Schalter im Panel: **1× Linksklick** startet alle Dienste der Gruppe
 die Unteransicht (Drill-Down) mit den einzelnen Diensten der Gruppe (Start/Stop
 wie gewohnt) plus „← zurück" zur Übersicht.
 
-Zusätzliche Scan-Pfade (Default nur `~/Projects/`):
-`~/.config/devwatch/config.json` → `{"scan_paths": ["/abs/pfad"]}`
+Zusätzliche Scan-Pfade — DevWatch überwacht standardmäßig nur `~/Projects/`.
+Mit einer kleinen Konfig können beliebige weitere Ordner durchsucht werden:
+
+`~/.config/devwatch/config.json`:
+
+```json
+{
+  "scan_paths": [
+    "~/code",
+    "${HOME}/arbeit",
+    "/absoluter/pfad"
+  ]
+}
+```
+
+- Jeder Eintrag wird nach **`~/`-Tilde** und **`${VAR}`-Umgebungsvariablen**
+  expandiert; relative/absolute Pfade gehen ebenfalls.
+- Jedes **Unterverzeichnis** eines Scan-Pfads, das eine `.devservices.json`
+  enthält, erscheint im Widget (analog zu `~/Projects/`).
+- **Wichtig:** Ungültige Einträge (Tippfehler, nicht existierende Ordner, leere
+  Zeichenketten) werden ignoriert und als **Konfigurationsfehler** im Panel
+  angezeigt (roter Hinweis statt stiller Ausfall).
+- Die Datei muss nicht existieren — ohne sie gilt nur der Standard `~/Projects/`.
 
 ## UI
 

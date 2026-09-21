@@ -41,21 +41,37 @@ MAX_BYTES = 65536
 
 
 def load_config():
+    """Scan-Basis-Pfade bestimmen: Default ~/Projects + scan_paths aus config.
+
+    Gibt (paths, warnings) zurück. warnings listet ungültige (Tippfehler/fehlende)
+    Einträge aus der config, damit der status-Snapshot sie sichtbar meldet.
+    """
     paths = [PROJECTS_DIR]
+    warnings = []
     try:
         with open(CONFIG_PATH) as f:
             extra = json.load(f).get("scan_paths", [])
-        for p in extra:
-            if os.path.isdir(p) and p not in paths:
-                paths.append(p)
     except (OSError, ValueError):
-        pass
-    return paths
+        extra = []
+    for p in extra:
+        if not isinstance(p, str) or not p.strip():
+            warnings.append("config: ungültiger scan_path-Eintrag (leer/nicht-Text)")
+            continue
+        # Tilde (~, ~user) und ${VAR}-Umgebungsvariablen expandieren — damit
+        # schreiben Nutzer "~/code" oder "${HOME}/arbeit" statt absoluter Pfade.
+        expanded = os.path.expandvars(os.path.expanduser(p.strip()))
+        if not os.path.isdir(expanded):
+            warnings.append(f"config: scan_path existiert nicht: {p}")
+            continue
+        if expanded not in paths:
+            paths.append(expanded)
+    return paths, warnings
 
 
 def find_projects():
     projects = {}
-    for base in load_config():
+    bases, config_warnings = load_config()
+    for base in bases:
         try:
             entries = sorted(os.listdir(base))
         except OSError:
@@ -82,7 +98,7 @@ def find_projects():
                 "group": data.get("group"),
                 "group_name": data.get("group_name"),
             }
-    return projects
+    return projects, config_warnings
 
 
 def port_open(port):
@@ -253,7 +269,7 @@ def svc_status(proj_path, svc):
 
 
 def snapshot():
-    projects = find_projects()
+    projects, config_warnings = find_projects()
     result = {}
     for pname, proj in projects.items():
         svcs = []
@@ -277,7 +293,8 @@ def snapshot():
                              "group": {"name": gname or pname, "services": svcs}}
         else:
             result[pname] = {"path": proj["path"], "services": svcs}
-    payload = json.dumps({"projects": result}, ensure_ascii=False)
+    payload = json.dumps({"projects": result, "config_warnings": config_warnings},
+                         ensure_ascii=False)
     sys.stdout.write(payload[:MAX_BYTES])
     sys.stdout.write("\n")
 
@@ -425,7 +442,7 @@ def main():
             print(__doc__)
             sys.exit(1)
         action, pname = args
-        projects = find_projects()
+        projects, _ = find_projects()
         proj = projects.get(pname)
         if not proj:
             print(f"Projekt nicht gefunden: {pname}", file=sys.stderr)
@@ -450,7 +467,7 @@ def main():
         print(__doc__)
         sys.exit(1)
     action, pname, sname = args
-    projects = find_projects()
+    projects, _ = find_projects()
     proj, svc = resolve(projects, pname, sname)
     proj_path = proj["path"]
     ok = True

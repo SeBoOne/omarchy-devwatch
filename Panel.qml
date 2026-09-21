@@ -39,6 +39,10 @@ Panel {
 
   readonly property var projects: snapshot ? (snapshot.projects || []) : []
 
+  // Warnungen aus der config (ungegueltige/fehlende scan_paths), vom Backend
+  // im status-Snapshot unter config_warnings geliefert.
+  readonly property var configWarnings: snapshot ? (snapshot.config_warnings || []) : []
+
   // Flatten for keyboard nav: [{project, path, svc}] entries, plus groups:
   // [{project, path, group:{name, services}}] when a project is grouped.
   // In Group-Drill-Down (drillProject set) sind nur die Gruppendienste drin.
@@ -382,8 +386,13 @@ Panel {
             visible: root.rows.length === 0 && !root.loading
             width: parent.width
             topPadding: Style.space(24)
-            text: "Keine Dienste gefunden.\nLege eine .devservices.json im Projekt an."
-            color: root.dim
+            text: {
+              // Warnungen (z.B. ungueltige scan_paths in der config) vorrangig zeigen.
+              if (root.configWarnings.length > 0)
+                return "Konfigurationsfehler:\n" + root.configWarnings.join("\n")
+              return "Keine Dienste gefunden.\nLege eine .devservices.json im Projekt an."
+            }
+            color: root.configWarnings.length > 0 ? root.errColor : root.dim
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             horizontalAlignment: Text.AlignHCenter
