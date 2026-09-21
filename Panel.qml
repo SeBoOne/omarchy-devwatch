@@ -219,8 +219,8 @@ Panel {
 
   function rowAt(i) { return root.rows[i] || null }
 
-  // Nothing to show → collapse out of the bar entirely.
-  visible: root.rows.length > 0
+  // Immer in der Bar sichtbar (auch bei 0 Diensten), damit klar ist, dass das
+  // Plugin installiert ist. Der Tooltip klärt bei leerer Konfig auf.
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
