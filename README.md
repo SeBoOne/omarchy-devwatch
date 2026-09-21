@@ -21,11 +21,6 @@ omarchy plugin disable sebo.devwatch      # keeps files, just hides the widget
 omarchy plugin remove sebo.devwatch       # uninstall (removes the plugin folder)
 ```
 
-Development: edit in `~/Projects/devwatch/`, then copy the changed files to
-`~/.config/omarchy/plugins/sebo.devwatch/` (hot-reload is active). After adding
-new files or manifest changes, run `omarchy-shell shell rescanPlugins` (and, if
-registration stays stale, `omarchy restart shell`).
-
 **Firewall support (optional):** The `"firewall": true` field (see below) uses
 `ufw`. UFW is part of the Omarchy base installation
 (`install/omarchy-base.packages`), so it is already present — no setup step
