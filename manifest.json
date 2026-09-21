@@ -5,14 +5,14 @@
   "version": "1.0.0",
   "author": "SeBo + Omar (Hermes)",
   "license": "MIT",
-  "description": "Lokale Entwickler-Dienste in der Leiste: gruppiert nach Projekt, mit Start/Stop/Neustart für Docker Compose, systemd-user und Custom-Befehle.",
+  "description": "Local developer services in the bar: grouped by project, with start/stop/restart for Docker Compose, systemd-user and custom commands.",
   "kinds": ["bar-widget"],
   "entryPoints": {
     "barWidget": "Panel.qml"
   },
   "barWidget": {
     "displayName": "DevWatch",
-    "description": "Projektbezogene Dev-Dienste verwalten: Docker, systemd, Custom-Server.",
+    "description": "Manage project-based dev services: Docker, systemd, custom servers.",
     "category": "Development",
     "aliases": ["devwatch", "services", "docker"],
     "allowMultiple": false

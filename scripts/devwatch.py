@@ -6,6 +6,8 @@ Subcommands:
   start     Start a service:   devwatch.py start <project> <service>
   stop      Stop a service:    devwatch.py stop  <project> <service>
   restart   Restart a service: devwatch.py restart <project> <service>
+  groupstart   Start every service of a group:  devwatch.py groupstart <project>
+  groupstop    Stop only the running ones:      devwatch.py groupstop  <project>
 
 Service definitions live in .devservices.json files inside each project
 directory. Scan paths default to ~/Projects and can be extended via
@@ -21,6 +23,12 @@ Service entry format (.devservices.json):
      "pidfile": ".devwatch-web.pid"}
   ]
 }
+
+Optional per service:
+- "firewall": true  — open (start) / close (stop) the port via UFW.
+- Grouping: a file with >1 service becomes one group; "group": {"name": "..."}
+  or top-level "group_name" sets the name (fallback: project key). Setting
+  "group": false disables grouping.
 
 Exit codes: 0 ok, 1 usage, 2 target not found, 3 action failed.
 """
@@ -41,10 +49,10 @@ MAX_BYTES = 65536
 
 
 def load_config():
-    """Scan-Basis-Pfade bestimmen: Default ~/Projects + scan_paths aus config.
+    """Determine scan base dirs: default ~/Projects + scan_paths from config.
 
-    Gibt (paths, warnings) zurück. warnings listet ungültige (Tippfehler/fehlende)
-    Einträge aus der config, damit der status-Snapshot sie sichtbar meldet.
+    Returns (paths, warnings). warnings lists invalid (typo/missing) entries
+    from the config, so the status snapshot can report them visibly.
     """
     paths = [PROJECTS_DIR]
     warnings = []
@@ -55,13 +63,13 @@ def load_config():
         extra = []
     for p in extra:
         if not isinstance(p, str) or not p.strip():
-            warnings.append("config: ungültiger scan_path-Eintrag (leer/nicht-Text)")
+            warnings.append("config: invalid scan_path entry (empty/non-text)")
             continue
         # Tilde (~, ~user) und ${VAR}-Umgebungsvariablen expandieren — damit
         # schreiben Nutzer "~/code" oder "${HOME}/arbeit" statt absoluter Pfade.
         expanded = os.path.expandvars(os.path.expanduser(p.strip()))
         if not os.path.isdir(expanded):
-            warnings.append(f"config: scan_path existiert nicht: {p}")
+            warnings.append(f"config: scan_path does not exist: {p}")
             continue
         if expanded not in paths:
             paths.append(expanded)
@@ -90,8 +98,8 @@ def find_projects():
                 data = {}
             if name in projects:
                 name = base.replace("/", "_") + "_" + name
-            # group-Metadaten (dict mit name oder bool false) + group_name für
-            # die Gruppierung mitnehmen, damit snapshot() entscheiden kann.
+            # Carry group metadata (dict with name or bool false) + group_name,
+            # so snapshot() can decide on grouping.
             projects[name] = {
                 "path": proj,
                 "services": services,
@@ -144,10 +152,10 @@ def adopt_port_owner(port):
 
 
 def ufw_result(port, action):
-    """Führe eine ufw-Aktion (allow/delete) als NOPASSWD-sudo aus.
+    """Run a ufw action (allow/delete) via NOPASSWD-sudo.
 
-    Gibt (ok, detail) zurück. Fehler werden NIE als Exception geworfen —
-    start/stop bricht dadurch nicht ab, der Zustand wird ehrlich berichtet.
+    Return (ok, detail). Errors are NEVER raised — start/stop does not abort,
+    the state is reported honestly.
     """
     try:
         # ufw-Syntax: `ufw allow <port>` und `ufw delete allow <port>` — das
@@ -161,25 +169,25 @@ def ufw_result(port, action):
         if res.returncode == 0:
             return True, "ufw ok"
         err = (res.stderr or res.stdout).strip()
-        return False, f"ufw Fehler ({res.returncode}): {err}"
+        return False, f"ufw error ({res.returncode}): {err}"
     except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"ufw Fehler: {e}"
+        return False, f"ufw error: {e}"
 
 
 def ufw_allowed(port):
-    """Prüfe, ob <port> laut ufw-Status freigegeben ist.
+    """Check whether <port> is allowed in the ufw status.
 
-    Gibt (allowed, detail) zurück; allowed=None wenn ufw nicht prüfbar
-    (kein NOPASSWD). Fehler werden nie als Exception geworfen.
+    Return (allowed, detail); allowed=None when ufw is not checkable
+    (no NOPASSWD). Errors are never raised.
     """
     try:
         res = subprocess.run(["sudo", "-n", UFW, "status", "numbered"],
                              capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired) as e:
-        return None, f"ufw Status Fehler: {e}"
+        return None, f"ufw status error: {e}"
     if res.returncode != 0:
         err = (res.stderr or res.stdout).strip()
-        return None, f"ufw Status Fehler ({res.returncode}): {err}"
+        return None, f"ufw status error ({res.returncode}): {err}"
     needle = f":{port}"
     for line in res.stdout.splitlines():
         if needle in line and ("ALLOW" in line.upper() or "ALLOW IN" in line.upper()):
@@ -206,15 +214,15 @@ def svc_status(proj_path, svc):
     stype = svc.get("type")
     out = {"running": False, "detail": "", "port": svc.get("port")}
     out["firewall"] = bool(svc.get("firewall"))
-    # allowed: true wenn firewall+Port und ufw den Port offen meldet;
-    # false wenn zu; None wenn kein firewall/port oder ufw nicht prüfbar.
+    # allowed: true when firewall+port and ufw reports the port open;
+    # false when closed; None when no firewall/port or ufw not checkable.
     out["allowed"] = None
     if firewalls(svc):
         allowed, fdet = ufw_allowed(svc.get("port"))
         out["allowed"] = allowed
         if allowed is False:
             out.setdefault("fw_detail", "ufw zu")
-        elif fdet and "Fehler" in fdet:
+        elif fdet and "error" in fdet.lower():
             out["fw_detail"] = fdet
 
     if stype == "compose":
@@ -222,7 +230,7 @@ def svc_status(proj_path, svc):
         name = svc.get("name", "").lower()
         lines = [l for l in res.stdout.splitlines()[1:] if l.strip()]
         if res.returncode != 0:
-            out["detail"] = "docker compose Fehler"
+            out["detail"] = "docker compose error"
             return out
         if name:
             hit = [l for l in lines if name in l.lower()]
@@ -257,10 +265,10 @@ def svc_status(proj_path, svc):
             except (OSError, ValueError):
                 alive = False
         out["running"] = alive
-        out["detail"] = f"pid {pid}" if alive else "gestoppt"
+        out["detail"] = f"pid {pid}" if alive else "stopped"
 
     else:
-        out["detail"] = f"unbekannter Typ: {stype}"
+        out["detail"] = f"unknown type: {stype}"
 
     po = port_open(out.get("port"))
     if po is not None:
@@ -302,18 +310,18 @@ def snapshot():
 def resolve(projects, pname, sname):
     proj = projects.get(pname)
     if not proj:
-        print(f"Projekt nicht gefunden: {pname}", file=sys.stderr)
+        print(f"Project not found: {pname}", file=sys.stderr)
         sys.exit(2)
     for svc in proj["services"]:
         if svc.get("name") == sname:
             return proj, svc
-    print(f"Dienst nicht gefunden: {sname}", file=sys.stderr)
+    print(f"Service not found: {sname}", file=sys.stderr)
     sys.exit(2)
 
 
 def do_start(proj_path, svc):
     stype = svc.get("type")
-    # Firewall vor dem Start: Port öffnen (nie crashen, Fehler loggen).
+    # Open the firewall port before start (never crash, log errors).
     if firewalls(svc):
         ok, detail = ufw_result(svc["port"], "allow")
         if not ok:
@@ -340,16 +348,16 @@ def do_start(proj_path, svc):
                 pid, start_time = adopted
                 with open(pidfile, "w") as f:
                     f.write(str(pid))
-                print(f"Port {port} bereits belegt — Prozess {pid} übernommen.", file=sys.stderr)
+                print(f"Port {port} already in use — adopted process {pid}.", file=sys.stderr)
                 return True
-            print(f"Port {port} belegt, Besitzer nicht identifizierbar.", file=sys.stderr)
+            print(f"Port {port} in use, owner not identifiable.", file=sys.stderr)
             return False
         # Already running?
         try:
             with open(pidfile) as f:
                 pid = int(f.read().strip())
             os.kill(pid, 0)
-            print("Läuft bereits.", file=sys.stderr)
+            print("Already running.", file=sys.stderr)
             return True
         except (OSError, ValueError):
             pass
@@ -362,7 +370,7 @@ def do_start(proj_path, svc):
             f.write(str(proc.pid))
         time.sleep(0.3)
         return proc.poll() is None
-    print(f"Start nicht unterstützt für Typ: {stype}", file=sys.stderr)
+    print(f"Start not supported for type: {stype}", file=sys.stderr)
     return False
 
 
@@ -405,9 +413,9 @@ def do_stop(proj_path, svc):
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
         pid, start_time = read_pid_identity(pidfile)
         if not pid:
-            print("Kein PID-Eintrag.", file=sys.stderr)
+            print("No PID entry.", file=sys.stderr)
         elif not proc_alive_with_identity(pid, start_time):
-            print("Prozess existiert nicht mehr oder PID wurde recycelt.", file=sys.stderr)
+            print("Process no longer exists or PID was recycled.", file=sys.stderr)
             os.remove(pidfile)
         else:
             os.kill(pid, signal.SIGTERM)
@@ -422,9 +430,9 @@ def do_stop(proj_path, svc):
             except OSError:
                 pass
     else:
-        print(f"Stop nicht unterstützt für Typ: {stype}", file=sys.stderr)
+        print(f"Stop not supported for type: {stype}", file=sys.stderr)
         return False
-    # Firewall NACH Prozess-Ende: Port schließen (nie crashen, Fehler loggen).
+    # Close the firewall port AFTER the process ended (never crash, log errors).
     if firewalls(svc):
         aok, adetail = ufw_result(svc["port"], "delete")
         if not aok:
@@ -445,7 +453,7 @@ def main():
         projects, _ = find_projects()
         proj = projects.get(pname)
         if not proj:
-            print(f"Projekt nicht gefunden: {pname}", file=sys.stderr)
+            print(f"Project not found: {pname}", file=sys.stderr)
             sys.exit(2)
         proj_path = proj["path"]
         targets = proj["services"]

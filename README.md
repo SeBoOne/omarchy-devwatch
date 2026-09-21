@@ -1,12 +1,12 @@
 # DevWatch
 
-Projektbezogener Dienst-Manager als **Omarchy-Bar-Widget**: lokale Dev-Dienste
-(Docker Compose, systemd-user, Custom-Befehle) gruppiert nach Projekt, mit
-Start/Stop/Neustart direkt aus der Leiste.
+Project-based dev-service manager as an **Omarchy bar widget**: local dev
+services (Docker Compose, systemd-user, custom commands) grouped by project,
+with start/stop/restart right from the bar.
 
-> **Voraussetzung:** Omarchy (Quickshell-basierte Shell). DevWatch ist ein
-> Omarchy-Plugin und läuft nur dort — nicht auf GNOME/KDE/XFCE. Davon abgesehen
-> ist es auf jedem Linux mit Omarchy lauffähig.
+> **Requirement:** Omarchy (Quickshell-based shell). DevWatch is an Omarchy
+> plugin and only runs there — not on GNOME/KDE/XFCE. Otherwise it works on any
+> Linux running Omarchy.
 
 ## Installation
 
@@ -14,17 +14,19 @@ Start/Stop/Neustart direkt aus der Leiste.
 omarchy plugin add https://github.com/SeBoOne/omarchy-devwatch.git --enable
 ```
 
-Entwicklung: in `~/Projects/devwatch/` editieren, dann die geänderten Dateien
-nach `~/.config/omarchy/plugins/sebo.devwatch/` kopieren (Hot-Reload aktiv).
+Development: edit in `~/Projects/devwatch/`, then copy the changed files to
+`~/.config/omarchy/plugins/sebo.devwatch/` (hot-reload is active). After adding
+new files or manifest changes, run `omarchy-shell shell rescanPlugins` (and, if
+registration stays stale, `omarchy restart shell`).
 
-**Firewall-Unterstützung (optional):** Die Funktion `"firewall": true` (siehe
-unten) nutzt `ufw`. Ufw ist Teil der Omarchy-Basisinstallation
-(`install/omarchy-base.packages`) und damit vorhanden — kein Installationsschritt
-nötig.
+**Firewall support (optional):** The `"firewall": true` field (see below) uses
+`ufw`. UFW is part of the Omarchy base installation
+(`install/omarchy-base.packages`), so it is already present — no setup step
+needed.
 
-## Dienste deklarieren
+## Declaring services
 
-Eine `.devservices.json` im Projektordner (z.B. `~/Projects/<projekt>/`):
+Place a `.devservices.json` in the project folder (e.g. `~/Projects/<projekt>/`):
 
 ```json
 {
@@ -39,29 +41,28 @@ Eine `.devservices.json` im Projektordner (z.B. `~/Projects/<projekt>/`):
 }
 ```
 
-- `compose`: `docker compose up -d` / `stop` im Projektordner, optional `file`
-  und `service_name` für einen einzelnen Container.
+- `compose`: `docker compose up -d` / `stop` in the project folder; optional
+  `file` and `service_name` to target a single container.
 - `systemd`: `systemctl --user start/stop <unit>`.
-- `cmd`: Befehl in eigener Session, PID + Logdatei im Projekt
-  (`.devwatch-<name>.log`). Stop mit SIGTERM, verifiziert PID-Identität
-  (/proc start time) vor dem Kill, ESCalation zu SIGKILL nach 6 s.
-- `port`: optionaler TCP-Check (IPv4 + IPv6) als Health-Anzeige.
-- `firewall`: optionales Feld (greift nur wenn `port` gesetzt). Beim Start wird
-  `sudo -n ufw allow <port>` ausgeführt, beim Stop `sudo -n ufw delete allow
-  <port>`. Benötigt eine NOPASSWD-Sudo-Regel (siehe
-  `scripts/setup-ufw-sudoers.sh`). Bei fehlender Berechtigung meldet der Status
-  einen echten Firewall-Fehler (`allowed: false`); der Dienst startet/stoppt
-  trotzdem, das Backend bricht NICHT ab.
+- `cmd`: runs the command in its own session, PID + log file in the project
+  (`.devwatch-<name>.log`). Stop via SIGTERM, verifies PID identity (/proc start
+  time) before killing, escalates to SIGKILL after 6 s.
+- `port`: optional TCP check (IPv4 + IPv6) shown as an health indicator.
+- `firewall`: optional field (only applies when `port` is set). On start runs
+  `sudo -n ufw allow <port>`, on stop `sudo -n ufw delete allow <port>`. Needs a
+  NOPASSWD sudo rule (see `scripts/setup-ufw-sudoers.sh`). If permission is
+  missing, the status reports a real firewall error (`allowed: false`); the
+  service still starts/stops, the backend does NOT abort.
 
-## Gruppierung
+## Grouping
 
-Eine `.devservices.json` mit **>1 Dienst** wird im Panel zu **EINER Gruppe**
-(ein Schalter statt Einzeldienst-Zeilen). Mit **==1 Dienst** bleibt sie ein
-Einzel-Schalter. Eine Mehrfach-Datei lässt sich per `"group": false` von der
-Gruppierung ausnehmen (bleibt Einzeldienste).
+A `.devservices.json` with **>1 service** becomes **one group** in the panel (a
+single switch instead of per-service rows). With **==1 service** it stays a
+single switch. A multi-service file can opt out of grouping via `"group": false`
+(stays as individual services).
 
-Gruppenname: `"group": {"name": "..."}` oder Top-Level `"group_name"`,
-Fallback ist der Projekt-Key (Ordnername):
+Group name: `"group": {"name": "..."}` or top-level `"group_name"`; fallback is
+the project key (folder name):
 
 ```json
 {
@@ -75,13 +76,15 @@ Fallback ist der Projekt-Key (Ordnername):
 }
 ```
 
-Gruppen-Schalter im Panel: **1× Linksklick** startet alle Dienste der Gruppe
-(keiner läuft), **2×-Klick-Flow** stoppt alle aktiven. **Rechtsklick** öffnet
-die Unteransicht (Drill-Down) mit den einzelnen Diensten der Gruppe (Start/Stop
-wie gewohnt) plus „← zurück" zur Übersicht.
+Group switch in the panel: **left-click** starts all services in the group (when
+none is running), a **double-click flow** stops all running ones. **Right-click**
+opens the drill-down subview with the group's individual services (start/stop as
+usual) plus a "back to overview" entry.
 
-Zusätzliche Scan-Pfade — DevWatch überwacht standardmäßig nur `~/Projects/`.
-Mit einer kleinen Konfig können beliebige weitere Ordner durchsucht werden:
+## Additional scan paths
+
+DevWatch only watches `~/Projects/` by default. Point it at any additional
+folders via a small config:
 
 `~/.config/devwatch/config.json`:
 
@@ -89,35 +92,36 @@ Mit einer kleinen Konfig können beliebige weitere Ordner durchsucht werden:
 {
   "scan_paths": [
     "~/code",
-    "${HOME}/arbeit",
-    "/absoluter/pfad"
+    "${HOME}/work",
+    "/absolute/path"
   ]
 }
 ```
 
-- Jeder Eintrag wird nach **`~/`-Tilde** und **`${VAR}`-Umgebungsvariablen**
-  expandiert; relative/absolute Pfade gehen ebenfalls.
-- Jedes **Unterverzeichnis** eines Scan-Pfads, das eine `.devservices.json`
-  enthält, erscheint im Widget (analog zu `~/Projects/`).
-- **Wichtig:** Ungültige Einträge (Tippfehler, nicht existierende Ordner, leere
-  Zeichenketten) werden ignoriert und als **Konfigurationsfehler** im Panel
-  angezeigt (roter Hinweis statt stiller Ausfall).
-- Die Datei muss nicht existieren — ohne sie gilt nur der Standard `~/Projects/`.
+- Every entry is expanded for **`~/` tilde** and **`${VAR}` environment
+  variables**; relative/absolute paths work too.
+- Every **subdirectory** of a scan path that contains a `.devservices.json`
+  appears in the widget (same as `~/Projects/`).
+- **Important:** invalid entries (typos, non-existent folders, empty strings)
+  are ignored and reported as a **configuration error** in the panel (red hint
+  instead of silent failure).
+- The file does not have to exist — without it, only the default `~/Projects/`
+  is used.
 
 ## UI
 
-- Bar-Widget rechts (grün, wenn mind. ein Dienst läuft), Klick öffnet Panel.
-- Ein Klick auf laufenden Dienst = Stoppen anfordern (Confirm), nochmal
-  klicken = Stoppen. Gestoppter Dienst: Klick = Starten.
-- Tastatur: ↑/↓ navigieren, Enter = Start/Stop(Confirm), Esc = schließen.
+- Bar widget (green when at least one service runs), click opens the panel.
+- One click on a running service requests stop (confirm); click again to stop. A
+  stopped service: click to start.
+- Keyboard: ↑/↓ navigate, Enter = start/stop (confirm), Esc = close.
 
 ## Backend (CLI)
 
 ```bash
-python3 scripts/devwatch.py status                 # JSON-Snapshot
-python3 scripts/devwatch.py start <projekt> <dienst>
-python3 scripts/devwatch.py stop  <projekt> <dienst>
-python3 scripts/devwatch.py restart <projekt> <dienst>
-python3 scripts/devwatch.py groupstart <projekt>  # startet alle Dienste der Gruppe
-python3 scripts/devwatch.py groupstop  <projekt>  # stoppt nur die laufenden der Gruppe
+python3 scripts/devwatch.py status                 # JSON snapshot
+python3 scripts/devwatch.py start <project> <service>
+python3 scripts/devwatch.py stop  <project> <service>
+python3 scripts/devwatch.py restart <project> <service>
+python3 scripts/devwatch.py groupstart <project>  # start all services of the group
+python3 scripts/devwatch.py groupstop  <project>  # stop only the running ones of the group
 ```

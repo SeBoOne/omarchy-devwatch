@@ -31,7 +31,7 @@ Panel {
   property bool busy: false
   // Confirm state for stop: "project/service" or "".
   property string confirmTarget: ""
-  // Tastatur-Fokus (eigene Deklaration, robust gegenüber Basis-Änderungen).
+  // Keyboard focus (own declaration, robust against base changes).
   property bool cursorActive: false
   property int focusedIndex: 0
 
@@ -118,13 +118,13 @@ Panel {
 
   function svcColor(svc) {
     if (svc.running) return root.okColor
-    if (svc.detail && String(svc.detail).indexOf("Fehler") >= 0) return root.errColor
+    if (svc.detail && String(svc.detail).toLowerCase().indexOf("error") >= 0) return root.errColor
     return root.stopColor
   }
 
   function statusGlyph(svc) {
     if (svc.running) return "●"
-    if (svc.detail && String(svc.detail).indexOf("Fehler") >= 0) return "✕"
+    if (svc.detail && String(svc.detail).toLowerCase().indexOf("error") >= 0) return "✕"
     return "○"
   }
 
@@ -223,8 +223,8 @@ Panel {
 
   function rowAt(i) { return root.rows[i] || null }
 
-  // Immer in der Bar sichtbar (auch bei 0 Diensten), damit klar ist, dass das
-  // Plugin installiert ist. Der Tooltip klärt bei leerer Konfig auf.
+  // Always visible in the bar (even with 0 services), so it is
+  // clearly that the plugin is installed. The tooltip clarifies on empty config.
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -328,7 +328,7 @@ Panel {
             width: parent.width
             title: root.drillProject !== "" ? "DevWatch — " + root.drillName : "DevWatch"
             meta: {
-              if (root.drillProject !== "") return root.rows.length + " Dienste in Gruppe"
+              if (root.drillProject !== "") return root.rows.length + " services in group"
               var run = 0
               var names = Object.keys(root.projects)
               for (var i = 0; i < names.length; i++) {
@@ -336,13 +336,13 @@ Panel {
                 if (p.group) run += root.groupRunningCount(names[i])
                 else { var svs = p.services || []; for (var j = 0; j < svs.length; j++) if (svs[j].running === true) run++ }
               }
-              return run + " / " + root.rows.length + " Dienste aktiv"
+              return run + " / " + root.rows.length + " services active"
             }
             foreground: root.foreground
             fontFamily: root.fontFamily
           }
 
-          // Group-Drill-Down: zurück zur Übersicht.
+          // Group drill-down: back to overview.
           CursorSurface {
             visible: root.drillProject !== ""
             width: parent.width
@@ -372,7 +372,7 @@ Panel {
                   anchors.verticalCenter: parent.verticalCenter
                 }
                 Text {
-                  text: "zurück zur Übersicht"
+                  text: "back to overview"
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.body
@@ -389,8 +389,8 @@ Panel {
             text: {
               // Warnungen (z.B. ungueltige scan_paths in der config) vorrangig zeigen.
               if (root.configWarnings.length > 0)
-                return "Konfigurationsfehler:\n" + root.configWarnings.join("\n")
-              return "Keine Dienste gefunden.\nLege eine .devservices.json im Projekt an."
+                return "Configuration error:\n" + root.configWarnings.join("\n")
+              return "No services found.\nCreate a .devservices.json in the project."
             }
             color: root.configWarnings.length > 0 ? root.errColor : root.dim
             font.family: root.fontFamily
@@ -567,16 +567,16 @@ Panel {
                     text: {
                       if (row.isGroupRow) {
                         var pk = modelData.project
-                        if (root.confirmTarget === pk) return "Erneut klicken = ALLE stoppen"
-                        if (root.groupState(pk) !== "off") return "Klick: Alle stoppen"
+                        if (root.confirmTarget === pk) return "Click again = stop all"
+                        if (root.groupState(pk) !== "off") return "Click: stop all"
                         if (root.busy) return "…"
-                        return "Klick: Alle starten"
+                        return "Click: start all"
                       }
                       var key = modelData.project + "/" + modelData.svc.name
-                      if (root.confirmTarget === key) return "Erneut klicken = STOPP"
-                      if (modelData.svc.running === true) return "Klick: Stoppen"
+                      if (root.confirmTarget === key) return "Click again = STOP"
+                      if (modelData.svc.running === true) return "Click: stop"
                       if (root.busy) return "…"
-                      return "Klick: Starten"
+                      return "Click: start"
                     }
                     color: (row.isGroupRow ? root.confirmTarget === modelData.project : root.confirmTarget === (modelData.project + "/" + modelData.svc.name)) ? root.errColor : root.dim
                     font.family: root.fontFamily
