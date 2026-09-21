@@ -23,7 +23,13 @@ set -euo pipefail
 SUDOERS_FILE="/etc/sudoers.d/devwatch-ufw"
 # Der exakte Eintrag — NICHT verallgemeinern. Ohne COMMAND-Argumente erlaubt
 # diese Zeile nur "ufw" samt seiner Argumente, nicht sudo mit beliebigen Befehlen.
-SUDOERS_LINE='sebo ALL=(root) NOPASSWD: /usr/sbin/ufw'
+# Der Nutzername wird dynamisch ermittelt (User, der `sudo bash ...` ausführt),
+# damit das Skript auf jedem System funktioniert.
+if [[ -z "${SUDO_USER:-}" ]]; then
+  echo "Fehler: Konnte den Ziel-Benutzer nicht ermitteln (SUDO_USER leer)." >&2
+  exit 1
+fi
+SUDOERS_LINE="${SUDO_USER} ALL=(root) NOPASSWD: /usr/sbin/ufw"
 
 # Nur mit ausreichender Berechtigung weiter — das Skript MUSS als root laufen
 # (visudo/sudoers.d schreiben). Verweigert, wenn der Aufrufer kein root ist.

@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Lokale Arbeitsnotizen / Pläne (Repository-spezifisch, nicht öffentlich)
+.hermes-plan.md
+
+# Editor / System
+*.swp
+*~
+.DS_Store

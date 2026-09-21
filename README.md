@@ -1,8 +1,12 @@
 # DevWatch
 
-Projektbezogener Dienst-Manager als Omarchy-Bar-Widget: lokale Dev-Dienste
+Projektbezogener Dienst-Manager als **Omarchy-Bar-Widget**: lokale Dev-Dienste
 (Docker Compose, systemd-user, Custom-Befehle) gruppiert nach Projekt, mit
 Start/Stop/Neustart direkt aus der Leiste.
+
+> **Voraussetzung:** Omarchy (Quickshell-basierte Shell). DevWatch ist ein
+> Omarchy-Plugin und läuft nur dort — nicht auf GNOME/KDE/XFCE. Davon abgesehen
+> ist es auf jedem Linux mit Omarchy lauffähig.
 
 ## Installation
 
@@ -14,6 +18,14 @@ omarchy plugin enable sebo.devwatch --section right
 
 Entwicklung: in `~/Projects/devwatch/` editieren, dann die geänderten Dateien
 nach `~/.config/omarchy/plugins/sebo.devwatch/` kopieren (Hot-Reload aktiv).
+
+**Firewall-Unterstützung (optional):** Die Funktion `"firewall": true` (siehe
+unten) nutzt `ufw`. Das ist ein Ubuntu/Debian-Tool und auf Arch/Omarchy nicht
+vorinstalliert — dort erst installieren:
+
+```bash
+sudo pacman -S ufw
+```
 
 ## Dienste deklarieren
 
