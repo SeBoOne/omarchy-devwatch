@@ -131,7 +131,7 @@ binding to `~/.config/hypr/bindings.lua` (no extra plugin needed):
 o.bind("SUPER + SHIFT + D", "DevWatch", "omarchy-shell shell toggle sebo.devwatch")
 ```
 
-If the key is already bound by Omarchy defaults, unbind it first:
+If the key is already bound by Omarchy defaults pick another key if u dont want to change it, else:
 
 ```lua
 hl.unbind("SUPER + SHIFT + D")
