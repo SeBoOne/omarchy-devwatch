@@ -554,8 +554,12 @@ Panel {
                       if (modelData.svc.detail) parts.push(modelData.svc.detail)
                       if (modelData.svc.port) parts.push(":" + modelData.svc.port + (modelData.svc.port_open === true ? " ✓" : " ✗"))
                       if (modelData.svc.firewall === true) {
-                        parts.push(modelData.svc.allowed === true ? "fw ✓" :
-                                   (modelData.svc.allowed === false ? "fw ✕" : "fw …"))
+                        // Fehlendem sudo/Firewall-Fehler: ehrlichen Detailtext zeigen.
+                        if (modelData.svc.fw_detail)
+                          parts.push(modelData.svc.fw_detail)
+                        else
+                          parts.push(modelData.svc.allowed === true ? "fw ✓" :
+                                     (modelData.svc.allowed === false ? "fw ✕" : "fw …"))
                       }
                       return parts.join(" · ")
                     }

@@ -191,8 +191,8 @@ def ufw_allowed(port):
     needle = f":{port}"
     for line in res.stdout.splitlines():
         if needle in line and ("ALLOW" in line.upper() or "ALLOW IN" in line.upper()):
-            return True, "ufw offen"
-    return False, "ufw zu"
+            return True, "ufw open"
+    return False, "ufw closed"
 
 
 def firewalls(svc):
@@ -220,9 +220,9 @@ def svc_status(proj_path, svc):
     if firewalls(svc):
         allowed, fdet = ufw_allowed(svc.get("port"))
         out["allowed"] = allowed
-        if allowed is False:
-            out.setdefault("fw_detail", "ufw zu")
-        elif fdet and "error" in fdet.lower():
+        # Nur ECHTE Fehler (kein sudo/kein NOPASSWD/Timeout) als detail setzen;
+        # offen/zu zeigt das Panel über allowed ✓/✕.
+        if allowed is None and fdet and "error" in fdet.lower():
             out["fw_detail"] = fdet
 
     if stype == "compose":
@@ -435,7 +435,7 @@ def do_stop(proj_path, svc):
     # Close the firewall port AFTER the process ended (never crash, log errors).
     if firewalls(svc):
         aok, adetail = ufw_result(svc["port"], "delete")
-        if not aok:
+        if not aok and adetail:
             print(adetail, file=sys.stderr)
     return ok
 
