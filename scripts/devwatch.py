@@ -220,10 +220,11 @@ def svc_status(proj_path, svc):
     if firewalls(svc):
         allowed, fdet = ufw_allowed(svc.get("port"))
         out["allowed"] = allowed
-        # Nur ECHTE Fehler (kein sudo/kein NOPASSWD/Timeout) als detail setzen;
-        # offen/zu zeigt das Panel über allowed ✓/✕.
-        if allowed is None and fdet and "error" in fdet.lower():
-            out["fw_detail"] = fdet
+        # Nur ECHTE Fehler (kein sudo/kein NOPASSWD/Timeout) kurz im Panel melden;
+        # der volle stderr-Text landet in do_start/do_stop im Log. offen/zu zeigt
+        # das Panel über allowed ✓/✕.
+        if allowed is None and fdet:
+            out["fw_detail"] = "ufw not set up"
 
     if stype == "compose":
         _, res = compose_cmd(proj_path, svc)
