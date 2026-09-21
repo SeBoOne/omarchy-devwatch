@@ -14,6 +14,13 @@ with start/stop/restart right from the bar.
 omarchy plugin add https://github.com/SeBoOne/omarchy-devwatch.git --enable
 ```
 
+Disable or remove:
+
+```bash
+omarchy plugin disable sebo.devwatch      # keeps files, just hides the widget
+omarchy plugin remove sebo.devwatch       # uninstall (removes the plugin folder)
+```
+
 Development: edit in `~/Projects/devwatch/`, then copy the changed files to
 `~/.config/omarchy/plugins/sebo.devwatch/` (hot-reload is active). After adding
 new files or manifest changes, run `omarchy-shell shell rescanPlugins` (and, if
