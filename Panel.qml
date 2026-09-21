@@ -272,6 +272,24 @@ Panel {
       anchors.fill: parent
 
       onMoveRequested: function(dx, dy) {
+        // Links/Rechts: Pfeil vertikal 0. In der Übersicht öffnet Rechts (→) die
+        // fokussierte Gruppe (Drill-Down); im Drill-Down geht Links (←) zurück.
+        if (dx !== 0) {
+          if (dx > 0) {
+            if (root.drillProject === "") {
+              var gr = rowAt(root.focusedIndex)
+              if (gr && gr.group) {
+                root.drillProject = gr.project
+                root.cursorActive = true
+                root.focusedIndex = 0
+                Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+              }
+            }
+          } else {
+            if (root.drillProject !== "") { root.drillProject = ""; root.focusedIndex = 0; root.cursorActive = true }
+          }
+          return
+        }
         if (dy === 0 || root.rows.length === 0) return
         var count = root.rows.length
         if (dy < 0) {
@@ -281,6 +299,7 @@ Panel {
           if (!root.cursorActive) { root.cursorActive = true; root.focusedIndex = 0 }
           else if (root.focusedIndex < count - 1) root.focusedIndex++
         }
+        Qt.callLater(function() { keyCatcher.forceActiveFocus() })
       }
       onCloseRequested: root.close()
       onActivateRequested: {
@@ -529,7 +548,7 @@ Panel {
                       if (row.isGroupRow) {
                         var c = root.groupRunningCount(modelData.project)
                         var svcLen = (modelData.group.services || []).length
-                        return c + " / " + svcLen + " aktiv"
+                        return c + " / " + svcLen + " active"
                       }
                       var parts = []
                       if (modelData.svc.detail) parts.push(modelData.svc.detail)
@@ -553,7 +572,7 @@ Panel {
                   spacing: Style.space(8)
 
                   Text {
-                    text: row.isGroupRow ? ("♢ Gruppe · " + modelData.project + " · Rechtsklick = Details") : ("▣ " + modelData.project)
+                    text: row.isGroupRow ? ("♢ Gruppe · Rightclick for Details") : ("▣ " + modelData.project)
                     color: row.isGroupRow ? root.accent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
