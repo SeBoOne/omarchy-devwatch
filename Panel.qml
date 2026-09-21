@@ -31,23 +31,63 @@ Panel {
   property bool busy: false
   // Confirm state for stop: "project/service" or "".
   property string confirmTarget: ""
+  // Tastatur-Fokus (eigene Deklaration, robust gegenüber Basis-Änderungen).
+  property bool cursorActive: false
+  property int focusedIndex: 0
 
   property int refreshIntervalSec: Math.max(10, Number(setting("refreshIntervalSec", 15)))
 
   readonly property var projects: snapshot ? (snapshot.projects || []) : []
 
-  // Flatten for keyboard nav: [{project, path, svc}] entries.
+  // Flatten for keyboard nav: [{project, path, svc}] entries, plus groups:
+  // [{project, path, group:{name, services}}] when a project is grouped.
+  // In Group-Drill-Down (drillProject set) sind nur die Gruppendienste drin.
+  property string drillProject: ""
+  readonly property string drillName: drillProject ? (root.projects[drillProject].group ? root.projects[drillProject].group.name : "") : ""
+
   readonly property var rows: {
     var out = []
     var names = Object.keys(root.projects).sort()
+    if (root.drillProject !== "") {
+      var gp = root.projects[root.drillProject]
+      if (!gp || !gp.group) return out
+      var gsvcs = gp.group.services || []
+      for (var k = 0; k < gsvcs.length; k++)
+        out.push({ project: root.drillProject, path: gp.path, svc: gsvcs[k] })
+      return out
+    }
     for (var i = 0; i < names.length; i++) {
       var p = root.projects[names[i]]
-      var svcs = p.services || []
-      for (var j = 0; j < svcs.length; j++)
-        out.push({ project: names[i], path: p.path, svc: svcs[j] })
+      if (p.group) {
+        out.push({ project: names[i], path: p.path, group: p.group })
+      } else {
+        var svcs = p.services || []
+        for (var j = 0; j < svcs.length; j++)
+          out.push({ project: names[i], path: p.path, svc: svcs[j] })
+      }
     }
     return out
   }
+
+  function groupRunningCount(project) {
+    var gp = root.projects[project]
+    if (!gp || !gp.group) return 0
+    var s = gp.group.services || []
+    var r = 0
+    for (var i = 0; i < s.length; i++) if (s[i].running === true) r++
+    return r
+  }
+
+  function groupAllRunning(project) {
+    var gp = root.projects[project]
+    if (!gp || !gp.group) return false
+    var s = gp.group.services || []
+    if (s.length === 0) return false
+    for (var i = 0; i < s.length; i++) if (s[i].running !== true) return false
+    return true
+  }
+
+  function groupAnyRunning(project) { return root.groupRunningCount(project) > 0 }
 
   function backendPath() {
     return Qt.resolvedUrl("scripts/devwatch.py").toString().replace(/^file:\/\//, "")
@@ -82,6 +122,32 @@ Panel {
 
   function typeLabel(t) {
     return t === "compose" ? "docker" : (t === "systemd" ? "systemd" : (t === "cmd" ? "cmd" : t))
+  }
+
+  // Gruppen-Schalter-Zustand: Mischzustand wenn einige (nicht alle) laufen.
+  function groupState(project) {
+    var c = root.groupRunningCount(project)
+    if (c === 0) return "off"
+    if (root.groupAllRunning(project)) return "all"
+    return "mix"
+  }
+
+  function groupColor(project) {
+    var st = root.groupState(project)
+    if (st === "off") return root.stopColor
+    if (st === "mix") return root.accent
+    return root.okColor
+  }
+
+  function groupGlyph(project) {
+    var st = root.groupState(project)
+    if (st === "off") return "○"
+    if (st === "mix") return "◐"
+    return "●"
+  }
+
+  function groupFirewallProblem(groupService) {
+    return groupService && groupService.firewall === true && groupService.allowed === false
   }
 
   Process {
@@ -131,6 +197,8 @@ Panel {
 
   onOpenedChanged: if (opened) {
     root.confirmTarget = ""
+    root.drillProject = ""
+    root.focusedIndex = 0
     root.refresh()
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
@@ -154,7 +222,17 @@ Panel {
 
   readonly property bool anyRunning: {
     var r = false
-    for (var i = 0; i < root.rows.length; i++) if (root.rows[i].svc.running) r = true
+    var names = Object.keys(root.projects)
+    for (var i = 0; i < names.length; i++) {
+      var p = root.projects[names[i]]
+      if (p.group) {
+        if (root.groupAnyRunning(names[i])) { r = true; break }
+      } else {
+        var svcs = p.services || []
+        for (var j = 0; j < svcs.length; j++) if (svcs[j].running === true) { r = true; break }
+      }
+      if (r) break
+    }
     return r
   }
 
@@ -200,9 +278,21 @@ Panel {
       onActivateRequested: {
         var row = rowAt(root.focusedIndex)
         if (!row) return
+        // Gruppenzeile in der Übersicht: Enter = Schalter (start/stop-Flow).
+        if (root.drillProject === "" && row.group) {
+          var pk = row.project
+          if (root.groupState(pk) !== "off") {
+            root.confirmTarget = root.confirmTarget === pk ? "" : pk
+            if (root.confirmTarget === "") root.action("groupstop", pk)
+          } else {
+            root.action("groupstart", pk)
+          }
+          return
+        }
+        if (!row.svc) return
         var key = row.project + "/" + row.svc.name
-        if (row.svc.running) {
-          if (root.confirmTarget === key) root.action("stop", row.project, row.svc.name)
+        if (row.svc.running === true) {
+          if (root.confirmTarget === key) { root.action("stop", row.project, row.svc.name); root.confirmTarget = "" }
           else root.confirmTarget = key
         } else {
           root.action("start", row.project, row.svc.name)
@@ -228,14 +318,60 @@ Panel {
 
           PanelHero {
             width: parent.width
-            title: "DevWatch"
+            title: root.drillProject !== "" ? "DevWatch — " + root.drillName : "DevWatch"
             meta: {
+              if (root.drillProject !== "") return root.rows.length + " Dienste in Gruppe"
               var run = 0
-              for (var i = 0; i < root.rows.length; i++) if (root.rows[i].svc.running) run++
+              var names = Object.keys(root.projects)
+              for (var i = 0; i < names.length; i++) {
+                var p = root.projects[names[i]]
+                if (p.group) run += root.groupRunningCount(names[i])
+                else { var svs = p.services || []; for (var j = 0; j < svs.length; j++) if (svs[j].running === true) run++ }
+              }
               return run + " / " + root.rows.length + " Dienste aktiv"
             }
             foreground: root.foreground
             fontFamily: root.fontFamily
+          }
+
+          // Group-Drill-Down: zurück zur Übersicht.
+          CursorSurface {
+            visible: root.drillProject !== ""
+            width: parent.width
+            implicitHeight: backRow.implicitHeight + Style.space(16)
+            bordered: false
+            foreground: root.foreground
+            accent: root.accent
+            current: false
+            hasCursor: false
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: { root.drillProject = ""; root.refresh(); Qt.callLater(function() { keyCatcher.forceActiveFocus() }) }
+              Row {
+                id: backRow
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                anchors.leftMargin: Style.space(12)
+                spacing: Style.space(8)
+                Text {
+                  text: "←"
+                  color: root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.title
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+                Text {
+                  text: "zurück zur Übersicht"
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  anchors.verticalCenter: parent.verticalCenter
+                }
+              }
+            }
           }
 
           Text {
@@ -258,8 +394,15 @@ Panel {
               required property var modelData
               required property int index
 
+              // EINE Zeile ist eine Gruppenzeile, wenn modelData.group existiert
+              // und kein Drill-Down-Treffer (svc) vorliegt.
+              readonly property bool isGroupRow: root.drillProject === "" && !!modelData.group
+              readonly property var svc: modelData.svc
+              readonly property string svcName: svc ? (svc.name || "?") : "?"
+              readonly property string groupName: modelData.group ? (modelData.group.name || modelData.project) : ""
+
               hasCursor: root.cursorActive && index === root.focusedIndex
-              current: modelData.svc.running === true
+              current: root.drillProject === "" ? false : (modelData.svc.running === true)
               bordered: false
               foreground: root.foreground
               accent: root.accent
@@ -271,7 +414,7 @@ Panel {
                 id: rowMouse
                 anchors.fill: parent
                 hoverEnabled: true
-                acceptedButtons: Qt.LeftButton
+                acceptedButtons: Qt.LeftButton | Qt.RightButton
                 cursorShape: Qt.PointingHandCursor
 
                 onContainsMouseChanged: if (containsMouse) {
@@ -279,9 +422,31 @@ Panel {
                   root.focusedIndex = index
                 }
 
-                onClicked: {
+                // Rechtsklick auf Gruppenzeile = Drill-Down in die Unteransicht.
+                onClicked: function(mouse) {
+                  if (mouse.button === Qt.RightButton) {
+                    if (row.isGroupRow) {
+                      root.drillProject = modelData.project
+                      root.cursorActive = false
+                      Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+                    }
+                    return
+                  }
+                  // Linksklick
+                  if (row.isGroupRow) {
+                    var pk = modelData.project
+                    // Misch- oder All-Laufend: 2×-Flow stoppt alle AKTIVEN.
+                    if (root.groupState(pk) !== "off") {
+                      if (root.confirmTarget === pk) root.action("groupstop", pk)
+                      else root.confirmTarget = pk
+                    } else {
+                      root.action("groupstart", pk)
+                    }
+                    return
+                  }
+                  // Einzeldienst (auch im Drill-Down): 1× start, 2× stop.
                   var key = modelData.project + "/" + modelData.svc.name
-                  if (modelData.svc.running) {
+                  if (modelData.svc.running === true) {
                     if (root.confirmTarget === key)
                       root.action("stop", modelData.project, modelData.svc.name)
                     else
@@ -308,8 +473,8 @@ Panel {
                   spacing: Style.space(6)
 
                   Text {
-                    text: statusGlyph(modelData.svc)
-                    color: svcColor(modelData.svc)
+                    text: row.isGroupRow ? root.groupGlyph(modelData.project) : statusGlyph(modelData.svc)
+                    color: row.isGroupRow ? root.groupColor(modelData.project) : svcColor(modelData.svc)
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.body
                     anchors.verticalCenter: parent.verticalCenter
@@ -317,7 +482,7 @@ Panel {
 
                   Text {
                     width: parent.width - typePill.width - statusText.width - Style.space(16)
-                    text: modelData.svc.name
+                    text: row.isGroupRow ? row.groupName : (modelData.svc.name || "?")
                     textFormat: Text.PlainText
                     color: root.foreground
                     font.family: root.fontFamily
@@ -338,7 +503,7 @@ Panel {
                     Text {
                       id: typeText
                       anchors.centerIn: parent
-                      text: typeLabel(modelData.svc.type)
+                      text: row.isGroupRow ? "Gruppe" : typeLabel(modelData.svc.type)
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption - 1 > 8 ? Style.font.caption - 1 : 8
@@ -348,9 +513,18 @@ Panel {
                   Text {
                     id: statusText
                     text: {
+                      if (row.isGroupRow) {
+                        var c = root.groupRunningCount(modelData.project)
+                        var svcLen = (modelData.group.services || []).length
+                        return c + " / " + svcLen + " aktiv"
+                      }
                       var parts = []
                       if (modelData.svc.detail) parts.push(modelData.svc.detail)
                       if (modelData.svc.port) parts.push(":" + modelData.svc.port + (modelData.svc.port_open === true ? " ✓" : " ✗"))
+                      if (modelData.svc.firewall === true) {
+                        parts.push(modelData.svc.allowed === true ? "fw ✓" :
+                                   (modelData.svc.allowed === false ? "fw ✕" : "fw …"))
+                      }
                       return parts.join(" · ")
                     }
                     color: root.dim
@@ -366,8 +540,8 @@ Panel {
                   spacing: Style.space(8)
 
                   Text {
-                    text: "▣ " + modelData.project
-                    color: root.dim
+                    text: row.isGroupRow ? ("♢ Gruppe · " + modelData.project + " · Rechtsklick = Details") : ("▣ " + modelData.project)
+                    color: row.isGroupRow ? root.accent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight
@@ -378,13 +552,20 @@ Panel {
                   Text {
                     id: actionHint
                     text: {
+                      if (row.isGroupRow) {
+                        var pk = modelData.project
+                        if (root.confirmTarget === pk) return "Erneut klicken = ALLE stoppen"
+                        if (root.groupState(pk) !== "off") return "Klick: Alle stoppen"
+                        if (root.busy) return "…"
+                        return "Klick: Alle starten"
+                      }
                       var key = modelData.project + "/" + modelData.svc.name
                       if (root.confirmTarget === key) return "Erneut klicken = STOPP"
-                      if (modelData.svc.running) return "Klick: Stoppen"
+                      if (modelData.svc.running === true) return "Klick: Stoppen"
                       if (root.busy) return "…"
                       return "Klick: Starten"
                     }
-                    color: root.confirmTarget === (modelData.project + "/" + modelData.svc.name) ? root.errColor : root.dim
+                    color: (row.isGroupRow ? root.confirmTarget === modelData.project : root.confirmTarget === (modelData.project + "/" + modelData.svc.name)) ? root.errColor : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     anchors.verticalCenter: parent.verticalCenter

@@ -32,6 +32,8 @@ import subprocess
 import sys
 import time
 
+UFW = "/usr/sbin/ufw"
+
 HOME = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".config", "devwatch", "config.json")
 PROJECTS_DIR = os.path.join(HOME, "Projects")
@@ -69,9 +71,17 @@ def find_projects():
                 services = data.get("services", [])
             except (OSError, ValueError):
                 services = []
+                data = {}
             if name in projects:
                 name = base.replace("/", "_") + "_" + name
-            projects[name] = {"path": proj, "services": services}
+            # group-Metadaten (dict mit name oder bool false) + group_name für
+            # die Gruppierung mitnehmen, damit snapshot() entscheiden kann.
+            projects[name] = {
+                "path": proj,
+                "services": services,
+                "group": data.get("group"),
+                "group_name": data.get("group_name"),
+            }
     return projects
 
 
@@ -117,6 +127,50 @@ def adopt_port_owner(port):
     return None
 
 
+def ufw_result(port, action):
+    """Führe eine ufw-Aktion (allow/delete) als NOPASSWD-sudo aus.
+
+    Gibt (ok, detail) zurück. Fehler werden NIE als Exception geworfen —
+    start/stop bricht dadurch nicht ab, der Zustand wird ehrlich berichtet.
+    """
+    try:
+        cmd = ["sudo", "-n", UFW] + ([action, str(port)] if action == "delete"
+                                     else [action, str(port)])
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0:
+            return True, "ufw ok"
+        err = (res.stderr or res.stdout).strip()
+        return False, f"ufw Fehler ({res.returncode}): {err}"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"ufw Fehler: {e}"
+
+
+def ufw_allowed(port):
+    """Prüfe, ob <port> laut ufw-Status freigegeben ist.
+
+    Gibt (allowed, detail) zurück; allowed=None wenn ufw nicht prüfbar
+    (kein NOPASSWD). Fehler werden nie als Exception geworfen.
+    """
+    try:
+        res = subprocess.run(["sudo", "-n", UFW, "status", "numbered"],
+                             capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"ufw Status Fehler: {e}"
+    if res.returncode != 0:
+        err = (res.stderr or res.stdout).strip()
+        return None, f"ufw Status Fehler ({res.returncode}): {err}"
+    needle = f":{port}"
+    for line in res.stdout.splitlines():
+        if needle in line and ("ALLOW" in line.upper() or "ALLOW IN" in line.upper()):
+            return True, "ufw offen"
+    return False, "ufw zu"
+
+
+def firewalls(svc):
+    """True, wenn der Dienst eine Firewall-Regel bekommen darf (firewall+port)."""
+    return bool(svc.get("firewall")) and bool(svc.get("port"))
+
+
 def compose_cmd(proj_path, svc):
     cmd = ["docker", "compose"]
     if svc.get("file"):
@@ -130,6 +184,17 @@ def compose_cmd(proj_path, svc):
 def svc_status(proj_path, svc):
     stype = svc.get("type")
     out = {"running": False, "detail": "", "port": svc.get("port")}
+    out["firewall"] = bool(svc.get("firewall"))
+    # allowed: true wenn firewall+Port und ufw den Port offen meldet;
+    # false wenn zu; None wenn kein firewall/port oder ufw nicht prüfbar.
+    out["allowed"] = None
+    if firewalls(svc):
+        allowed, fdet = ufw_allowed(svc.get("port"))
+        out["allowed"] = allowed
+        if allowed is False:
+            out.setdefault("fw_detail", "ufw zu")
+        elif fdet and "Fehler" in fdet:
+            out["fw_detail"] = fdet
 
     if stype == "compose":
         _, res = compose_cmd(proj_path, svc)
@@ -191,7 +256,21 @@ def snapshot():
             entry = {"name": svc.get("name", "?"), "type": svc.get("type", "?")}
             entry.update(svc_status(proj["path"], svc))
             svcs.append(entry)
-        if svcs:
+        if not svcs:
+            continue
+        # Gruppiert?: >1 Dienst UND nicht explizit "group": false.
+        # Gruppenname: "group": {"name":...} → group_name top-level → Projekt-Key.
+        grouped = len(svcs) > 1 and proj.get("group") is not False
+        if grouped:
+            gname = None
+            gc = proj.get("group")
+            if isinstance(gc, dict):
+                gname = gc.get("name")
+            if not gname:
+                gname = proj.get("group_name")
+            result[pname] = {"path": proj["path"],
+                             "group": {"name": gname or pname, "services": svcs}}
+        else:
             result[pname] = {"path": proj["path"], "services": svcs}
     payload = json.dumps({"projects": result}, ensure_ascii=False)
     sys.stdout.write(payload[:MAX_BYTES])
@@ -212,6 +291,11 @@ def resolve(projects, pname, sname):
 
 def do_start(proj_path, svc):
     stype = svc.get("type")
+    # Firewall vor dem Start: Port öffnen (nie crashen, Fehler loggen).
+    if firewalls(svc):
+        ok, detail = ufw_result(svc["port"], "allow")
+        if not ok:
+            print(detail, file=sys.stderr)
     if stype == "compose":
         cmd = ["docker", "compose"]
         if svc.get("file"):
@@ -284,6 +368,7 @@ def read_pid_identity(pidfile):
 
 def do_stop(proj_path, svc):
     stype = svc.get("type")
+    ok = True
     if stype == "compose":
         cmd = ["docker", "compose"]
         if svc.get("file"):
@@ -291,33 +376,38 @@ def do_stop(proj_path, svc):
         cmd.append("stop")
         if svc.get("service_name"):
             cmd.append(svc["service_name"])
-        return subprocess.run(cmd, cwd=proj_path).returncode == 0
-    if stype == "systemd":
-        return subprocess.run(["systemctl", "--user", "stop", svc.get("unit", "")]).returncode == 0
-    if stype == "cmd":
+        ok = subprocess.run(cmd, cwd=proj_path).returncode == 0
+    elif stype == "systemd":
+        ok = subprocess.run(["systemctl", "--user", "stop", svc.get("unit", "")]).returncode == 0
+    elif stype == "cmd":
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
         pid, start_time = read_pid_identity(pidfile)
         if not pid:
             print("Kein PID-Eintrag.", file=sys.stderr)
-            return True
-        if not proc_alive_with_identity(pid, start_time):
+        elif not proc_alive_with_identity(pid, start_time):
             print("Prozess existiert nicht mehr oder PID wurde recycelt.", file=sys.stderr)
             os.remove(pidfile)
-            return True
-        os.kill(pid, signal.SIGTERM)
-        for _ in range(30):
-            time.sleep(0.2)
-            if not proc_alive_with_identity(pid, start_time):
-                break
         else:
-            os.kill(pid, signal.SIGKILL)
-        try:
-            os.remove(pidfile)
-        except OSError:
-            pass
-        return True
-    print(f"Stop nicht unterstützt für Typ: {stype}", file=sys.stderr)
-    return False
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(30):
+                time.sleep(0.2)
+                if not proc_alive_with_identity(pid, start_time):
+                    break
+            else:
+                os.kill(pid, signal.SIGKILL)
+            try:
+                os.remove(pidfile)
+            except OSError:
+                pass
+    else:
+        print(f"Stop nicht unterstützt für Typ: {stype}", file=sys.stderr)
+        return False
+    # Firewall NACH Prozess-Ende: Port schließen (nie crashen, Fehler loggen).
+    if firewalls(svc):
+        aok, adetail = ufw_result(svc["port"], "delete")
+        if not aok:
+            print(adetail, file=sys.stderr)
+    return ok
 
 
 def main():
@@ -325,6 +415,32 @@ def main():
     if not args or args[0] == "status":
         snapshot()
         return
+    if args[0] == "groupstart" or args[0] == "groupstop":
+        if len(args) != 2:
+            print(__doc__)
+            sys.exit(1)
+        action, pname = args
+        projects = find_projects()
+        proj = projects.get(pname)
+        if not proj:
+            print(f"Projekt nicht gefunden: {pname}", file=sys.stderr)
+            sys.exit(2)
+        proj_path = proj["path"]
+        targets = proj["services"]
+        ok = True
+        for svc in targets:
+            if action == "groupstop":
+                # Nur laufende der Gruppe stoppen (sequenziell, kein Port-Race).
+                st = svc_status(proj_path, svc)
+                if not st["running"]:
+                    continue
+                if not do_stop(proj_path, svc):
+                    ok = False
+            else:
+                # groupstart: alle (do_start/adopt_logik verhindern Port-Race).
+                if not do_start(proj_path, svc):
+                    ok = False
+        sys.exit(0 if ok else 3)
     if len(args) != 3 or args[0] not in ("start", "stop", "restart"):
         print(__doc__)
         sys.exit(1)
