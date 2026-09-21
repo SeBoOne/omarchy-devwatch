@@ -113,7 +113,33 @@ folders via a small config:
 - Bar widget (green when at least one service runs), click opens the panel.
 - One click on a running service requests stop (confirm); click again to stop. A
   stopped service: click to start.
-- Keyboard: ↑/↓ navigate, Enter = start/stop (confirm), Esc = close.
+## Keyboard
+
+- ↑/↓ navigate, Enter = start/stop (confirm), Esc = close.
+- **→ (Right) in the overview opens the focused group** (drill-down into its
+  individual services); **← (Left) returns to the overview**. Group switch on
+  Enter/Space still starts/stops the whole group.
+
+## Optional: keyboard shortcut for the panel
+
+The panel can be toggled (open/close) from a terminal at any time with
+`omarchy-shell shell toggle sebo.devwatch`. To bind that to a key, add a
+binding to `~/.config/hypr/bindings.lua` (no extra plugin needed):
+
+```lua
+-- ~/.config/hypr/bindings.lua
+o.bind("SUPER + SHIFT + D", "DevWatch", "omarchy-shell shell toggle sebo.devwatch")
+```
+
+If the key is already bound by Omarchy defaults, unbind it first:
+
+```lua
+hl.unbind("SUPER + SHIFT + D")
+o.bind("SUPER + SHIFT + D", "DevWatch", "omarchy-shell shell toggle sebo.devwatch")
+```
+
+Reload Hyprland config (usually auto-applied on save; if not, `hyprctl reload`)
+— DevWatch then opens/closes with one keypress.
 
 ## Backend (CLI)
 
