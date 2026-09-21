@@ -104,7 +104,11 @@ Panel {
     if (root.busy) return
     root.busy = true
     root.confirmTarget = ""
-    actionProcess.command = ["python3", backendPath(), kind, project, svcName]
+    // svcName nur anhaengen, wenn gesetzt — groupstart/groupstop erwarten
+    // genau 2 Argumente (kein trailing undefined, sonst Usage-exit: "nichts passiert").
+    var cmd = ["python3", backendPath(), kind, project]
+    if (svcName && String(svcName) !== "") cmd.push(svcName)
+    actionProcess.command = cmd
     actionProcess.running = true
   }
 
