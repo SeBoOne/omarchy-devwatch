@@ -134,8 +134,13 @@ def ufw_result(port, action):
     start/stop bricht dadurch nicht ab, der Zustand wird ehrlich berichtet.
     """
     try:
-        cmd = ["sudo", "-n", UFW] + ([action, str(port)] if action == "delete"
-                                     else [action, str(port)])
+        # ufw-Syntax: `ufw allow <port>` und `ufw delete allow <port>` — das
+        # `allow`-Schluesselwort darf bei delete NICHT fehlen, sonst antwortet
+        # ufw "Could not find rule" und der Port bleibt offen.
+        if action == "delete":
+            cmd = ["sudo", "-n", UFW, "delete", "allow", str(port)]
+        else:
+            cmd = ["sudo", "-n", UFW, "allow", str(port)]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if res.returncode == 0:
             return True, "ufw ok"
