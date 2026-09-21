@@ -8,7 +8,7 @@
 # devwatch needs a narrow NOPASSWD rule ONLY for ufw.
 #
 # Run as root (sudoers write):
-#   sudo bash scripts/setup-ufw-sudoers.sh
+#   sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh
 #
 # IMPORTANT — SECURITY:
 # * It NEVER creates a blanket "ALL=(ALL) NOPASSWD: ALL".

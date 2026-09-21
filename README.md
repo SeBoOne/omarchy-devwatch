@@ -173,8 +173,11 @@ status simply does not report a firewall rule. No error is shown.
    `sudo -n`. That needs a narrow NOPASSWD rule limited to `ufw` only. Run the
    setup once as root:
 
+   These scripts live in the installed plugin folder, so call the setup script
+   with its full path (no need to cd anywhere):
+
    ```bash
-   sudo bash scripts/setup-ufw-sudoers.sh
+   sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh
    ```
 
    The script writes `/etc/sudoers.d/devwatch-ufw` with the single rule
