@@ -18,7 +18,7 @@ Entwicklung: in `~/Projects/devwatch/` editieren, dann die geänderten Dateien
 nach `~/.config/omarchy/plugins/sebo.devwatch/` kopieren (Hot-Reload aktiv).
 
 **Firewall-Unterstützung (optional):** Die Funktion `"firewall": true` (siehe
-unten) nutzt `ufw`. Ufw (und `ufw-docker`) sind Teil der Omarchy-Basisinstallation
+unten) nutzt `ufw`. Ufw ist Teil der Omarchy-Basisinstallation
 (`install/omarchy-base.packages`) und damit vorhanden — kein Installationsschritt
 nötig.
 
