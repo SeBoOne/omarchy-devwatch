@@ -39,13 +39,13 @@ Panel {
 
   readonly property var projects: snapshot ? (snapshot.projects || []) : []
 
-  // Warnungen aus der config (ungegueltige/fehlende scan_paths), vom Backend
+  // Warnings from config (invalid/missing scan_paths), surfaced by the backend
   // im status-Snapshot unter config_warnings geliefert.
   readonly property var configWarnings: snapshot ? (snapshot.config_warnings || []) : []
 
   // Flatten for keyboard nav: [{project, path, svc}] entries, plus groups:
   // [{project, path, group:{name, services}}] when a project is grouped.
-  // In Group-Drill-Down (drillProject set) sind nur die Gruppendienste drin.
+  // In Group drill-down (drillProject set) only the group's services are listed.
   property string drillProject: ""
   readonly property string drillName: drillProject ? (root.projects[drillProject].group ? root.projects[drillProject].group.name : "") : ""
 
@@ -132,7 +132,7 @@ Panel {
     return t === "compose" ? "docker" : (t === "systemd" ? "systemd" : (t === "cmd" ? "cmd" : t))
   }
 
-  // Gruppen-Schalter-Zustand: Mischzustand wenn einige (nicht alle) laufen.
+  // Group switch state: mixed when some (not all) services are running.
   function groupState(project) {
     var c = root.groupRunningCount(project)
     if (c === 0) return "off"
@@ -305,7 +305,7 @@ Panel {
       onActivateRequested: {
         var row = rowAt(root.focusedIndex)
         if (!row) return
-        // Gruppenzeile in der Übersicht: Enter = Schalter (start/stop-Flow).
+        // Group row in the overview: Enter = switch (start/stop-flow).
         if (root.drillProject === "" && row.group) {
           var pk = row.project
           if (root.groupState(pk) !== "off") {
@@ -406,7 +406,7 @@ Panel {
             width: parent.width
             topPadding: Style.space(24)
             text: {
-              // Warnungen (z.B. ungueltige scan_paths in der config) vorrangig zeigen.
+              // Warnings (e.g. invalid scan_paths in the config) take priority.
               if (root.configWarnings.length > 0)
                 return "Configuration error:\n" + root.configWarnings.join("\n")
               return "No services found.\nCreate a .devservices.json in the project."
@@ -426,7 +426,7 @@ Panel {
               required property var modelData
               required property int index
 
-              // EINE Zeile ist eine Gruppenzeile, wenn modelData.group existiert
+              // A row is a group row when modelData.group exists.
               // und kein Drill-Down-Treffer (svc) vorliegt.
               readonly property bool isGroupRow: root.drillProject === "" && !!modelData.group
               readonly property var svc: modelData.svc
@@ -454,7 +454,7 @@ Panel {
                   root.focusedIndex = index
                 }
 
-                // Rechtsklick auf Gruppenzeile = Drill-Down in die Unteransicht.
+                // Right-click on a group row = drill-down into the subview.
                 onClicked: function(mouse) {
                   if (mouse.button === Qt.RightButton) {
                     if (row.isGroupRow) {
@@ -535,7 +535,7 @@ Panel {
                     Text {
                       id: typeText
                       anchors.centerIn: parent
-                      text: row.isGroupRow ? "Gruppe" : typeLabel(modelData.svc.type)
+                      text: row.isGroupRow ? "Group" : typeLabel(modelData.svc.type)
                       color: root.dim
                       font.family: root.fontFamily
                       font.pixelSize: Style.font.caption - 1 > 8 ? Style.font.caption - 1 : 8
@@ -576,7 +576,7 @@ Panel {
                   spacing: Style.space(8)
 
                   Text {
-                    text: row.isGroupRow ? ("♢ Gruppe · Rightclick for Details") : ("▣ " + modelData.project)
+                    text: row.isGroupRow ? ("♢ Group · Right-click for Details") : ("▣ " + modelData.project)
                     color: row.isGroupRow ? root.accent : root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
