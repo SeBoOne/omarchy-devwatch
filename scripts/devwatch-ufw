@@ -41,6 +41,14 @@ if [[ ! "${PORT}" =~ ^[0-9]+$ ]]; then
   echo "devwatch-ufw: invalid port '${PORT}' (numeric required)" >&2
   exit 64
 fi
+# Reject absurdly long digit strings up front: `(( PORT > 65535 ))` uses
+# 64-bit signed arithmetic and would WRAP on values >= 2^64 (e.g. 18446744073709551608),
+# passing the range check even though ufw would reject the value. Cap the length
+# so the arithmetic check is authoritative.
+if (( ${#PORT} > 5 )); then
+  echo "devwatch-ufw: port out of range 1-65535: ${PORT}" >&2
+  exit 64
+fi
 if (( PORT < 1 || PORT > 65535 )); then
   echo "devwatch-ufw: port out of range 1-65535: ${PORT}" >&2
   exit 64

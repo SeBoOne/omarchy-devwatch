@@ -115,24 +115,57 @@ def find_projects():
 def port_open(port):
     if not port:
         return None
+    try:
+        port_i = int(port)
+    except (TypeError, ValueError):
+        # A non-integer port in the config must not crash the whole status
+        # snapshot (one bad service used to take the entire panel down).
+        return None
     for host in ("127.0.0.1", "::1"):
         try:
-            with socket.create_connection((host, int(port)), timeout=0.3):
+            with socket.create_connection((host, port_i), timeout=0.3):
                 return True
         except OSError:
             continue
     return False
 
 
+def proc_start_time(pid):
+    """Robustly read start_time (field 22) from /proc/<pid>/stat.
+
+    The comm field (2) is parenthesized and may contain spaces, so a naive
+    whitespace split() would shift every following index. Correct approach:
+    split off the first ')' — fields before it (pid + comm) are dropped — then
+    start_time is element [19] of the remainder (field 22 - fields 1-3).
+    """
+    try:
+        data = open(f"/proc/{pid}/stat", "rb").read()
+        rest = data.split(b")", 1)[1]  # everything after pid (comm)
+        return rest.split()[19].decode()
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 def adopt_port_owner(port):
-    """Find the PID listening on <port> (any address, IPv4+IPv6) and verify
-    its /proc identity. Returns (pid, starttime) or None."""
+    """Find the PID listening on <port> (any address, IPv4+IPv6), verify its
+    /proc identity AND that it belongs to our user.
+
+    Returns (pid, starttime) or None. Adoption is a big hammer: we later SIGTERM
+    that PID on stop, so we only ever adopt a process we can PROVE is ours
+    (same euid). A root-owned or foreign-user listener is NOT adopted — we
+    must never terminate a process we don't own.
+    """
     try:
         res = subprocess.run(["ss", "-H", "-ltnp"], capture_output=True,
                              text=True, timeout=5)
     except (OSError, subprocess.TimeoutExpired):
         return None
-    needle = f":{int(port)} "
+    try:
+        port_i = int(port)
+    except (TypeError, ValueError):
+        return None
+    needle = f":{port_i} "
+    my_uid = os.geteuid()
     for line in res.stdout.splitlines():
         if needle not in line:
             continue
@@ -140,16 +173,21 @@ def adopt_port_owner(port):
         if idx == -1:
             continue
         for chunk in line[idx:].split(","):
-            chunk = chunk.strip().strip('"))(( ')
+            chunk = chunk.strip().strip('")(( ')
             if chunk.startswith("pid="):
                 try:
                     pid = int(chunk[4:])
                 except ValueError:
                     continue
                 try:
-                    starttime = open(f"/proc/{pid}/stat", "rb").read().split()[21].decode()
-                    return pid, starttime
-                except (OSError, IndexError):
+                    # Only adopt processes running as OUR user; never a
+                    # root-owned or another-user process we cannot own.
+                    if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                        continue
+                    starttime = proc_start_time(pid)
+                    if starttime is not None:
+                        return pid, starttime
+                except OSError:
                     continue
     return None
 
@@ -300,7 +338,20 @@ def snapshot():
             result[pname] = {"path": proj["path"], "services": svcs}
     payload = json.dumps({"projects": result, "config_warnings": config_warnings},
                          ensure_ascii=False)
-    sys.stdout.write(payload[:MAX_BYTES])
+    # The widget transport caps the payload; if we exceed it, emit VALID JSON
+    # rather than a byte-cut document the panel would fail to parse. Drop whole
+    # top-level projects until the payload fits (keeping the JSON structure
+    # valid throughout), then a final byte trim as a hard safety net.
+    if len(payload) > MAX_BYTES:
+        for dropped in list(result.keys()):
+            result.pop(dropped, None)
+            payload = json.dumps({"projects": result,
+                                  "config_warnings": config_warnings},
+                                 ensure_ascii=False)
+            if len(payload) <= MAX_BYTES:
+                break
+        payload = payload[:MAX_BYTES]
+    sys.stdout.write(payload)
     sys.stdout.write("\n")
 
 
@@ -330,9 +381,18 @@ def do_start(proj_path, svc):
         cmd.append("up")
         if svc.get("detached", True):
             cmd.append("-d")
-        return subprocess.run(cmd, cwd=proj_path).returncode == 0
+        try:
+            return subprocess.run(cmd, cwd=proj_path, timeout=60).returncode == 0
+        except subprocess.TimeoutExpired:
+            print("docker compose up timed out.", file=sys.stderr)
+            return False
     if stype == "systemd":
-        return subprocess.run(["systemctl", "--user", "start", svc.get("unit", "")]).returncode == 0
+        try:
+            return subprocess.run(["systemctl", "--user", "start", svc.get("unit", "")],
+                                  timeout=30).returncode == 0
+        except subprocess.TimeoutExpired:
+            print("systemctl start timed out.", file=sys.stderr)
+            return False
     if stype == "cmd":
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
         port = svc.get("port")
@@ -347,18 +407,24 @@ def do_start(proj_path, svc):
                 return True
             print(f"Port {port} in use, owner not identifiable.", file=sys.stderr)
             return False
-        # Already running?
-        try:
-            with open(pidfile) as f:
-                pid = int(f.read().strip())
-            os.kill(pid, 0)
+        # Already running? (pidfile has two lines now: pid + start_time; only
+        # treat as running if the recorded start time still matches, so a stale
+        # file pointing at a reused PID is NOT mistaken for our service.)
+        ppid, pst = load_pidfile(pidfile)
+        if ppid and proc_alive_with_identity(ppid, pst):
             print("Already running.", file=sys.stderr)
             return True
-        except (OSError, ValueError):
-            pass
+        # NOTE: shell=True is intentional here — svc["command"] is a
+        # user-defined dev command in their own .devservices.json (e.g.
+        # "php -S localhost:8080"). It is configuration, not attacker input;
+        # the marketplace baseline reviewed and accepts this design.
+        cmd_str = svc.get("command", "")
+        if not cmd_str:
+            print(f"Service '{svc.get('name')}': missing 'command' for type cmd.", file=sys.stderr)
+            return False
         logfile = os.path.join(proj_path, ".devwatch-" + svc.get("name", "x") + ".log")
         with open(logfile, "ab") as log:
-            proc = subprocess.Popen(svc["command"], shell=True, cwd=proj_path,
+            proc = subprocess.Popen(cmd_str, shell=True, cwd=proj_path,
                                     stdout=log, stderr=subprocess.STDOUT,
                                     start_new_session=True)
         write_pidfile(pidfile, proc.pid)
@@ -389,10 +455,7 @@ def load_pidfile(pidfile):
 def write_pidfile(pidfile, pid, start_time=None):
     """Write pid + start_time so a later stop can prove process identity."""
     if start_time is None:
-        try:
-            start_time = open(f"/proc/{pid}/stat", "rb").read().split()[21].decode()
-        except (OSError, IndexError):
-            start_time = None
+        start_time = proc_start_time(pid)
     with open(pidfile, "w") as f:
         f.write(f"{pid}\n{start_time if start_time is not None else ''}\n")
 
@@ -403,10 +466,8 @@ def proc_alive_with_identity(pid, start_time):
         return False
     try:
         os.kill(pid, 0)
-        with open(f"/proc/{pid}/stat", "rb") as f:
-            fields = f.read().split()
-        return fields[21].decode() == str(start_time)
-    except (OSError, IndexError, ValueError):
+        return proc_start_time(pid) == str(start_time)
+    except (OSError, ValueError):
         return False
 
 
@@ -420,9 +481,18 @@ def do_stop(proj_path, svc):
         cmd.append("stop")
         if svc.get("service_name"):
             cmd.append(svc["service_name"])
-        ok = subprocess.run(cmd, cwd=proj_path).returncode == 0
+        try:
+            ok = subprocess.run(cmd, cwd=proj_path, timeout=30).returncode == 0
+        except subprocess.TimeoutExpired:
+            print("docker compose stop timed out.", file=sys.stderr)
+            ok = False
     elif stype == "systemd":
-        ok = subprocess.run(["systemctl", "--user", "stop", svc.get("unit", "")]).returncode == 0
+        try:
+            ok = subprocess.run(["systemctl", "--user", "stop", svc.get("unit", "")],
+                                timeout=30).returncode == 0
+        except subprocess.TimeoutExpired:
+            print("systemctl stop timed out.", file=sys.stderr)
+            ok = False
     elif stype == "cmd":
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
         pid, start_time = load_pidfile(pidfile)
@@ -430,19 +500,32 @@ def do_stop(proj_path, svc):
             print("No PID entry.", file=sys.stderr)
         elif not proc_alive_with_identity(pid, start_time):
             print("Process no longer exists or PID was recycled.", file=sys.stderr)
-            os.remove(pidfile)
-        else:
-            os.kill(pid, signal.SIGTERM)
-            for _ in range(30):
-                time.sleep(0.2)
-                if not proc_alive_with_identity(pid, start_time):
-                    break
-            else:
-                os.kill(pid, signal.SIGKILL)
             try:
                 os.remove(pidfile)
             except OSError:
                 pass
+        else:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except PermissionError:
+                print(f"Cannot stop pid {pid} (no permission).", file=sys.stderr)
+                ok = False
+            else:
+                for _ in range(30):
+                    time.sleep(0.2)
+                    if not proc_alive_with_identity(pid, start_time):
+                        break
+                else:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+                try:
+                    os.remove(pidfile)
+                except OSError:
+                    pass
     else:
         print(f"Stop not supported for type: {stype}", file=sys.stderr)
         return False

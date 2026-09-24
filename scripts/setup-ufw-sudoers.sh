@@ -50,8 +50,18 @@ RULES=(
 if [[ "${1:-}" == "--uninstall" ]]; then
   if [[ -f "${SUDOERS_FILE}" ]]; then
     if sudo grep -qF "NOPASSWD: ${HELPER_TARGET}" "${SUDOERS_FILE}"; then
-      echo "Removing ${SUDOERS_FILE} (DevWatch helper rule)."
-      sudo rm -f "${SUDOERS_FILE}"
+      # Remove ONLY our three helper rules, preserving any other lines an
+      # operator placed in the same drop-in (install appends, uninstall must
+      # not over-remove).
+      echo "Removing DevWatch helper rules from ${SUDOERS_FILE}."
+      sudo sed -i "/NOPASSWD: ${HELPER_TARGET}/d" "${SUDOERS_FILE}"
+      # If nothing remains, drop the now-empty drop-in; otherwise keep it.
+      if [[ -z "$(sudo tr -d '[:space:]' < "${SUDOERS_FILE}")" ]]; then
+        sudo rm -f "${SUDOERS_FILE}"
+      else
+        sudo chown root:root "${SUDOERS_FILE}"
+        sudo chmod 0440 "${SUDOERS_FILE}"
+      fi
       sudo visudo -c >/dev/null 2>&1 || echo "Review sudoers: visudo -c" >&2
     else
       echo "${SUDOERS_FILE} holds no DevWatch helper rule; leaving it untouched."
