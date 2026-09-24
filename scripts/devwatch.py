@@ -69,8 +69,7 @@ def load_config():
         if not isinstance(p, str) or not p.strip():
             warnings.append("config: invalid scan_path entry (empty/non-text)")
             continue
-        # Tilde (~, ~user) und ${VAR}-Umgebungsvariablen expandieren — damit
-        # schreiben Nutzer "~/code" oder "${HOME}/arbeit" statt absoluter Pfade.
+        # Paths can be given relative with tilde or env vars, e.g. "~/code".
         expanded = os.path.expandvars(os.path.expanduser(p.strip()))
         if not os.path.isdir(expanded):
             warnings.append(f"config: scan_path does not exist: {p}")
@@ -190,10 +189,10 @@ def ufw_allowed(port):
     if res.returncode != 0:
         err = (res.stderr or res.stdout).strip()
         return None, f"ufw status error ({res.returncode}): {err}"
-    # ufw 'status numbered' druckt den Port als eigenes Token (ggf. mit /proto),
-    # z.B. "[ 1] 8090/tcp  ALLOW IN  Anywhere" oder "[ 1] 8090  ALLOW ...".
-    # NICHT mit führendem Doppelpunkt suchen (hoert auf ss-:port-Syntax) — sonst
-    # nie gematcht und der Port steht auf 'fw ✕', obwohl er offen ist.
+    # ufw 'status numbered' prints the port as its own token (maybe with /proto):
+        # "[ 1] 8090/tcp  ALLOW IN  Anywhere" or "[ 1] 8090  ALLOW ...".
+    # NOT with a leading colon (that is ss :port syntax) — the port would never
+    # match and stay shown as 'fw ✕' even when open.
     p = str(port)
     for line in res.stdout.splitlines():
         if "ALLOW" not in line.upper():
@@ -205,7 +204,7 @@ def ufw_allowed(port):
 
 
 def firewalls(svc):
-    """True, wenn der Dienst eine Firewall-Regel bekommen darf (firewall+port)."""
+    """True if the service gets a firewall rule (firewall + port)."""
     return bool(svc.get("firewall")) and bool(svc.get("port"))
 
 
@@ -229,9 +228,9 @@ def svc_status(proj_path, svc):
     if firewalls(svc):
         allowed, fdet = ufw_allowed(svc.get("port"))
         out["allowed"] = allowed
-        # Nur ECHTE Fehler (kein sudo/kein NOPASSWD/Timeout) kurz im Panel melden;
-        # der volle stderr-Text landet in do_start/do_stop im Log. offen/zu zeigt
-        # das Panel über allowed ✓/✕.
+        # Only report real errors (no sudo / no NOPASSWD / timeout) briefly in
+        # the panel; the full stderr text goes to the log in do_start/do_stop
+        # The panel renders allowed via ✓/✕; only real errors set fw_detail below.
         if allowed is None and fdet:
             out["fw_detail"] = "ufw not set up"
 
@@ -245,10 +244,10 @@ def svc_status(proj_path, svc):
         if name:
             hit = [l for l in lines if name in l.lower()]
             out["running"] = bool(hit) and "exited" not in hit[0].lower()
-            out["detail"] = hit[0].split()[3] if hit and len(hit[0].split()) > 3 else (f"{len(lines)} Container" if lines else "kein Container")
+            out["detail"] = hit[0].split()[3] if hit and len(hit[0].split()) > 3 else (f"{len(lines)} Container" if lines else "no containers")
         else:
             out["running"] = bool(lines)
-            out["detail"] = f"{len(lines)} Container" if lines else "kein Container"
+            out["detail"] = f"{len(lines)} Container" if lines else "no containers"
 
     elif stype == "systemd":
         unit = svc.get("unit", "")
@@ -349,9 +348,8 @@ def do_start(proj_path, svc):
     if stype == "cmd":
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
         port = svc.get("port")
-        # Port schon von irgendeinem Prozess belegt? (z.B. von einer anderen
-        # Sitzung manuell gestartet) → den Prozess adoptieren statt einen
-        # Zombie-Eintrag zu erzeugen, der "Failed to listen" produziert.
+        # Port already taken? (e.g. started manually in another session) → adopt
+        # that process instead of creating a zombie entry that "Failed to listen".
         if port and port_open(port):
             adopted = adopt_port_owner(port)
             if adopted:
@@ -470,14 +468,14 @@ def main():
         ok = True
         for svc in targets:
             if action == "groupstop":
-                # Nur laufende der Gruppe stoppen (sequenziell, kein Port-Race).
+                # Only stop the running ones of the group (sequential, no port race).
                 st = svc_status(proj_path, svc)
                 if not st["running"]:
                     continue
                 if not do_stop(proj_path, svc):
                     ok = False
             else:
-                # groupstart: alle (do_start/adopt_logik verhindern Port-Race).
+                # groupstart: start all (do_start/adopt logic prevents port race).
                 if not do_start(proj_path, svc):
                     ok = False
         sys.exit(0 if ok else 3)
