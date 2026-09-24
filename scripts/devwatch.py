@@ -246,14 +246,37 @@ def firewalls(svc):
     return bool(svc.get("firewall")) and bool(svc.get("port"))
 
 
-def compose_cmd(proj_path, svc):
+def compose_ps(proj_path, svc):
+    """Query docker compose ps as JSON (Compose v2). Returns (list, errdetail).
+
+    Parsing the fields (Service/Name/Status) is far more reliable than matching
+    substrings against the human table — a service named 'api' must not match
+    container 'my-api-web'.
+    """
     cmd = ["docker", "compose"]
     if svc.get("file"):
         cmd += ["-f", os.path.join(proj_path, svc["file"])]
-    cmd.append("ps")
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
-                         env={**os.environ, "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG", "")})
-    return cmd[:-1], res
+    cmd += ["ps", "--format", "json"]
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                             cwd=proj_path,
+                             env={**os.environ, "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG", "")})
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return [], f"docker compose error: {e}"
+    if res.returncode != 0:
+        return [], "docker compose error"
+    containers = []
+    for line in res.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            j = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(j, dict) and ("Service" in j or "ServiceId" in j):
+            containers.append(j)
+    return containers, ""
 
 
 def svc_status(proj_path, svc):
@@ -273,19 +296,23 @@ def svc_status(proj_path, svc):
             out["fw_detail"] = "ufw not set up"
 
     if stype == "compose":
-        _, res = compose_cmd(proj_path, svc)
-        name = svc.get("name", "").lower()
-        lines = [l for l in res.stdout.splitlines()[1:] if l.strip()]
-        if res.returncode != 0:
-            out["detail"] = "docker compose error"
+        containers, cerr = compose_ps(proj_path, svc)
+        if cerr:
+            out["detail"] = cerr
             return out
+        name = svc.get("name", "").lower()
         if name:
-            hit = [l for l in lines if name in l.lower()]
-            out["running"] = bool(hit) and "exited" not in hit[0].lower()
-            out["detail"] = hit[0].split()[3] if hit and len(hit[0].split()) > 3 else (f"{len(lines)} Container" if lines else "no containers")
+            # Exact service-name match from the structured JSON (unlike a
+            # substring the whole line — 'api' must not match 'my-api-web').
+            hit = [c for c in containers
+                   if str(c.get("Service", "")).lower() == name
+                   or str(c.get("Name", "")).lower() == name]
+            status = (hit[0].get("State") or hit[0].get("Status") or "") if hit else ""
+            out["running"] = bool(hit) and "exit" not in status.lower()
+            out["detail"] = status or (f"{len(containers)} Container" if containers else "no containers")
         else:
-            out["running"] = bool(lines)
-            out["detail"] = f"{len(lines)} Container" if lines else "no containers"
+            out["running"] = bool(containers)
+            out["detail"] = f"{len(containers)} Container" if containers else "no containers"
 
     elif stype == "systemd":
         unit = svc.get("unit", "")
@@ -296,7 +323,7 @@ def svc_status(proj_path, svc):
         out["detail"] = state
 
     elif stype == "cmd":
-        pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
+        pidfile = project_path(proj_path, svc.get("pidfile"), f".devwatch-{svc.get('name','x')}.pid")
         pid, st0 = load_pidfile(pidfile)
         alive = bool(pid) and proc_alive_with_identity(pid, st0)
         out["running"] = alive
@@ -394,7 +421,7 @@ def do_start(proj_path, svc):
             print("systemctl start timed out.", file=sys.stderr)
             return False
     if stype == "cmd":
-        pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
+        pidfile = project_path(proj_path, svc.get("pidfile"), f".devwatch-{svc.get('name','x')}.pid")
         port = svc.get("port")
         # Port already taken? (e.g. started manually in another session) → adopt
         # that process instead of creating a zombie entry that "Failed to listen".
@@ -422,7 +449,7 @@ def do_start(proj_path, svc):
         if not cmd_str:
             print(f"Service '{svc.get('name')}': missing 'command' for type cmd.", file=sys.stderr)
             return False
-        logfile = os.path.join(proj_path, ".devwatch-" + svc.get("name", "x") + ".log")
+        logfile = project_path(proj_path, f".devwatch-{svc.get('name','x')}.log", f".devwatch-{svc.get('name','x')}.log")
         with open(logfile, "ab") as log:
             proc = subprocess.Popen(cmd_str, shell=True, cwd=proj_path,
                                     stdout=log, stderr=subprocess.STDOUT,
@@ -432,6 +459,29 @@ def do_start(proj_path, svc):
         return proc.poll() is None
     print(f"Start not supported for type: {stype}", file=sys.stderr)
     return False
+
+
+def project_path(proj_path, cfg_path, default):
+    """Resolve a service-configured file path safely inside the project dir.
+
+    Guards H-1 (path traversal / symlink): os.path.join would let an absolute
+    'pidfile' escape proj_path entirely, and '..' parts could write/remove files
+    anywhere. We force the result to live under proj_path and reject symlinks
+    (open follows links by default) by never pointing at one.
+    """
+    try:
+        src = str(cfg_path).strip() if cfg_path else ""
+        if not src:
+            return os.path.join(proj_path, default)
+        # Reject absolute paths and any leading '..' escaping the project.
+        joined = os.path.normpath(os.path.join(proj_path, src))
+        proj_norm = os.path.normpath(proj_path)
+        if not joined.startswith(proj_norm + os.sep) and joined != proj_norm:
+            print(f"config: path '{src}' escapes project dir; using default.", file=sys.stderr)
+            return os.path.join(proj_path, default)
+        return joined
+    except Exception:
+        return os.path.join(proj_path, default)
 
 
 def load_pidfile(pidfile):
@@ -494,7 +544,7 @@ def do_stop(proj_path, svc):
             print("systemctl stop timed out.", file=sys.stderr)
             ok = False
     elif stype == "cmd":
-        pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
+        pidfile = project_path(proj_path, svc.get("pidfile"), f".devwatch-{svc.get('name','x')}.pid")
         pid, start_time = load_pidfile(pidfile)
         if not pid:
             print("No PID entry.", file=sys.stderr)
