@@ -272,8 +272,8 @@ Panel {
       anchors.fill: parent
 
       onMoveRequested: function(dx, dy) {
-        // Links/Rechts: Pfeil vertikal 0. In der Übersicht öffnet Rechts (→) die
-        // fokussierte Gruppe (Drill-Down); im Drill-Down geht Links (←) zurück.
+        // Left/Right arrow: vertical is 0. In the overview Right (→) opens the
+        // focused group (drill-down); in drill-down Left (←) goes back.
         if (dx !== 0) {
           if (dx > 0) {
             if (root.drillProject === "") {

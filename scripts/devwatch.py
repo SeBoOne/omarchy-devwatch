@@ -296,8 +296,8 @@ def snapshot():
             svcs.append(entry)
         if not svcs:
             continue
-        # Gruppiert?: >1 Dienst UND nicht explizit "group": false.
-        # Gruppenname: "group": {"name":...} → group_name top-level → Projekt-Key.
+        # Grouped?: >1 service AND not explicitly "group": false.
+        # Group name: "group": {"name":...} → group_name top-level → project-key.
         grouped = len(svcs) > 1 and proj.get("group") is not False
         if grouped:
             gname = None
