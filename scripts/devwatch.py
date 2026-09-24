@@ -259,20 +259,8 @@ def svc_status(proj_path, svc):
 
     elif stype == "cmd":
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
-        pid = None
-        try:
-            with open(pidfile) as f:
-                pid = int(f.read().strip())
-        except (OSError, ValueError):
-            pass
-        alive = False
-        if pid:
-            try:
-                os.kill(pid, 0)
-                with open(f"/proc/{pid}/cmdline", "rb") as f:
-                    alive = bool(f.read())
-            except (OSError, ValueError):
-                alive = False
+        pid, st0 = load_pidfile(pidfile)
+        alive = bool(pid) and proc_alive_with_identity(pid, st0)
         out["running"] = alive
         out["detail"] = f"pid {pid}" if alive else "stopped"
 
@@ -354,8 +342,7 @@ def do_start(proj_path, svc):
             adopted = adopt_port_owner(port)
             if adopted:
                 pid, start_time = adopted
-                with open(pidfile, "w") as f:
-                    f.write(str(pid))
+                write_pidfile(pidfile, pid, start_time)
                 print(f"Port {port} already in use — adopted process {pid}.", file=sys.stderr)
                 return True
             print(f"Port {port} in use, owner not identifiable.", file=sys.stderr)
@@ -374,16 +361,46 @@ def do_start(proj_path, svc):
             proc = subprocess.Popen(svc["command"], shell=True, cwd=proj_path,
                                     stdout=log, stderr=subprocess.STDOUT,
                                     start_new_session=True)
-        with open(pidfile, "w") as f:
-            f.write(str(proc.pid))
+        write_pidfile(pidfile, proc.pid)
         time.sleep(0.3)
         return proc.poll() is None
     print(f"Start not supported for type: {stype}", file=sys.stderr)
     return False
 
 
+def load_pidfile(pidfile):
+    """Read a pidfile into (pid, start_time).
+
+    New pidfiles store two lines (pid then start_time captured at start), so a
+    reused PID is never mistaken for the original process. A legacy one-line
+    pidfile yields (pid, None): identity cannot be proven, so do_stop refuses
+    to kill it (defensive default).
+    """
+    try:
+        with open(pidfile) as f:
+            lines = f.read().split()
+        pid = int(lines[0])
+        start_time = lines[1].strip() if (len(lines) >= 2 and lines[1].isdigit()) else None
+        return pid, start_time
+    except (OSError, ValueError, IndexError):
+        return None, None
+
+
+def write_pidfile(pidfile, pid, start_time=None):
+    """Write pid + start_time so a later stop can prove process identity."""
+    if start_time is None:
+        try:
+            start_time = open(f"/proc/{pid}/stat", "rb").read().split()[21].decode()
+        except (OSError, IndexError):
+            start_time = None
+    with open(pidfile, "w") as f:
+        f.write(f"{pid}\n{start_time if start_time is not None else ''}\n")
+
+
 def proc_alive_with_identity(pid, start_time):
     """Verify /proc/<pid> still refers to the same process we started."""
+    if start_time is None:
+        return False
     try:
         os.kill(pid, 0)
         with open(f"/proc/{pid}/stat", "rb") as f:
@@ -391,17 +408,6 @@ def proc_alive_with_identity(pid, start_time):
         return fields[21].decode() == str(start_time)
     except (OSError, IndexError, ValueError):
         return False
-
-
-def read_pid_identity(pidfile):
-    try:
-        with open(pidfile) as f:
-            pid = int(f.read().strip())
-        with open(f"/proc/{pid}/stat", "rb") as f:
-            fields = f.read().split()
-        return pid, fields[21].decode()
-    except (OSError, IndexError, ValueError):
-        return None, None
 
 
 def do_stop(proj_path, svc):
@@ -419,7 +425,7 @@ def do_stop(proj_path, svc):
         ok = subprocess.run(["systemctl", "--user", "stop", svc.get("unit", "")]).returncode == 0
     elif stype == "cmd":
         pidfile = os.path.join(proj_path, svc.get("pidfile", f".devwatch-{svc.get('name','x')}.pid"))
-        pid, start_time = read_pid_identity(pidfile)
+        pid, start_time = load_pidfile(pidfile)
         if not pid:
             print("No PID entry.", file=sys.stderr)
         elif not proc_alive_with_identity(pid, start_time):
