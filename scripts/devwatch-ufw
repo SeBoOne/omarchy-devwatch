@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# devwatch-ufw — root-owned helper: the ONLY thing the NOPASSWD sudo rule allows.
+#
+# Run by devwatch.py as  sudo -n /usr/local/sbin/devwatch-ufw <action> [port]
+#
+# Security design (marketplace review compliant):
+#   * The sudoers rule grants NOPASSWD to /usr/local/sbin/devwatch-ufw ONLY
+#     for the exact commands `allow`, `deny` and `status`. It does NOT grant
+#     access to /usr/sbin/ufw itself, so no process (DevWatch or anything else
+#     running as user) can run ufw disable / ufw reset / arbitrary rules.
+#   * This file is installed root:root mode 0755, so a compromised user process
+#     cannot modify it.
+#   * The action is constrained to a fixed enum and the port to a numeric
+#     range, enforced HERE — sudoers cannot express ranges, so this file is the
+#     authority. The only elevated action reachable is "open/close exactly one
+#     TCP|UDP port".
+
+set -euo pipefail
+
+ACTION="${1:-}"
+PORT="${2:-}"
+
+case "${ACTION}" in
+  allow)  ;;
+  deny)   ;;
+  status) ;;
+  *)
+    echo "devwatch-ufw: unknown action '${ACTION}' (expected: allow|deny|status)" >&2
+    exit 64
+    ;;
+esac
+
+# status is read-only and needs no port.
+if [[ "${ACTION}" == "status" ]]; then
+  exec /usr/sbin/ufw status numbered
+fi
+
+# Port must be a plain integer in the valid range. Reject blanks, non-digits,
+# leading +/-, overflow, and anything sudoers can't express.
+if [[ ! "${PORT}" =~ ^[0-9]+$ ]]; then
+  echo "devwatch-ufw: invalid port '${PORT}' (numeric required)" >&2
+  exit 64
+fi
+if (( PORT < 1 || PORT > 65535 )); then
+  echo "devwatch-ufw: port out of range 1-65535: ${PORT}" >&2
+  exit 64
+fi
+
+if [[ "${ACTION}" == "allow" ]]; then
+  exec /usr/sbin/ufw allow "${PORT}"
+else
+  # 'allow' keyword is required — `ufw delete <port>` answers "Could not find
+  # rule" and leaves the port open.
+  exec /usr/sbin/ufw delete allow "${PORT}"
+fi

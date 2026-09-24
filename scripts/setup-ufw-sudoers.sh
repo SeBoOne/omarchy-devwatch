@@ -1,103 +1,102 @@
 #!/usr/bin/env bash
-# setup-ufw-sudoers.sh — configure / remove the NOPASSWD sudo rule for ufw
+# setup-ufw-sudoers.sh — install / remove the NOPASSWD rule for the DevWatch
+# root-owned helper `devwatch-ufw`.
 #
-# Purpose: devwatch.py runs for services with "firewall": true
-#   sudo -n ufw allow  <port>       (on start, before process start)
-#   sudo -n ufw delete allow <port> (on stop, AFTER the process ended)
-# To work without a password prompt (the Omarchy bar cannot type a password),
-# devwatch needs a narrow NOPASSWD rule ONLY for ufw.
+# SECURITY (marketplace-review compliant):
+#   * Run this as your NORMAL user:   bash scripts/setup-ufw-sudoers.sh
+#     NOT `sudo bash ...`. The script performs each privileged step with an
+#     explicit `sudo <command>` call, so no user-writable checkout code is ever
+#     executed under root bash.
+#   * The NOPASSWD grant covers ONLY the root-owned helper
+#     /usr/local/sbin/devwatch-ufw for the fixed actions allow|deny|status
+#     (sudoers Cmnd-masking). There is NO grant for /usr/sbin/ufw itself, so a
+#     compromised user process cannot run `ufw disable`/`reset`/arbitrary rules.
+#   * The helper is installed root:root 0755 via `sudo install` (copied, never
+#     run as root bash) and it enforces a strict numeric port range.
 #
-# Usage (as root):
-#   Install:  sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh
-#   Remove:   sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh --uninstall
-# Run --uninstall BEFORE `omarchy plugin remove sebo.devwatch` (the plugin folder,
-# including this script, is deleted afterwards). Omarchy has no post-remove hook,
-# so removing the rule is a manual extra step.
+# Usage:
+#   bash scripts/setup-ufw-sudoers.sh            # install helper + rule
+#   bash scripts/setup-ufw-sudoers.sh --uninstall  # remove rule (before plugin rm)
 #
-# IMPORTANT — SECURITY:
-# * It NEVER creates a blanket "ALL=(ALL) NOPASSWD: ALL".
-# * The rule is limited to the single command /usr/sbin/ufw.
-# * The path /usr/sbin/ufw is hard-coded (no shell-star, no comma) so the rule
-#   cannot be widened via argument injection.
+# Requires sudo rights for the calling (non-root) user.
 
 set -euo pipefail
 
 SUDOERS_FILE="/etc/sudoers.d/devwatch-ufw"
+HELPER_TARGET="/usr/local/sbin/devwatch-ufw"
+HELPER_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/devwatch-ufw"
 
-# The script MUST run as root (writes /etc/sudoers.d).
-if [[ "$(id -u)" -ne 0 ]]; then
-  echo "Error: this setup script requires ROOT privileges." >&2
-  echo "Run it with:  sudo bash $0 [--uninstall]" >&2
+# Refuse to run as root: we can't tell whose user-side the rule should target.
+if [[ "$(id -u)" -eq 0 ]]; then
+  echo "Error: run this as your NORMAL user, not as root." >&2
+  echo "  bash scripts/setup-ufw-sudoers.sh [--uninstall]" >&2
   exit 1
 fi
 
+TARGET_USER="$(id -un)"
+
+# Exactly three helper actions; sudoers Cmnd-masking prevents any other command
+# line from matching. The helper additionally enforces the port range, so the
+# effective privilege is 'open/close exactly one TCP|UDP port' plus read-only
+# status — nothing else.
+RULES=(
+  "${TARGET_USER} ALL=(root) NOPASSWD: ${HELPER_TARGET} status"
+  "${TARGET_USER} ALL=(root) NOPASSWD: ${HELPER_TARGET} allow [0-9]*"
+  "${TARGET_USER} ALL=(root) NOPASSWD: ${HELPER_TARGET} deny  [0-9]*"
+)
+
 # ---------------------------------------------------------------------------
-# Uninstall: remove the sudoers rule we created. Independent of SUDO_USER.
+# Uninstall
 if [[ "${1:-}" == "--uninstall" ]]; then
   if [[ -f "${SUDOERS_FILE}" ]]; then
-    if ! grep -qF "NOPASSWD: /usr/sbin/ufw" "${SUDOERS_FILE}"; then
-      echo "No ufw NOPASSWD rule found in ${SUDOERS_FILE}; leaving it untouched."
+    if sudo grep -qF "NOPASSWD: ${HELPER_TARGET}" "${SUDOERS_FILE}"; then
+      echo "Removing ${SUDOERS_FILE} (DevWatch helper rule)."
+      sudo rm -f "${SUDOERS_FILE}"
+      sudo visudo -c >/dev/null 2>&1 || echo "Review sudoers: visudo -c" >&2
     else
-      echo "Removing ${SUDOERS_FILE} (our ufw NOPASSWD rule)."
-      rm -f "${SUDOERS_FILE}"
-      echo "Validating sudoers syntax after removal…"
-      visudo -c
+      echo "${SUDOERS_FILE} holds no DevWatch helper rule; leaving it untouched."
     fi
   else
     echo "${SUDOERS_FILE} does not exist — nothing to remove."
   fi
-  echo "Done. You can now remove the plugin:"
-  echo "  omarchy plugin remove sebo.devwatch"
+  echo "Done. You may remove the plugin now:  omarchy plugin remove sebo.devwatch"
   exit 0
 fi
 
 # ---------------------------------------------------------------------------
 # Install
-
-# The exact entry — do NOT generalize. Without COMMAND arguments this line only
-# allows "ufw" and its arguments, not sudo with arbitrary commands.
-# The user name is resolved dynamically (the one running `sudo bash ...`),
-# so the script works on any system.
-if [[ -z "${SUDO_USER:-}" ]]; then
-  echo "Error: could not determine the target user (SUDO_USER is empty)." >&2
-  exit 1
+if [[ "$#" -gt 0 ]]; then
+  echo "Unknown option: $1 (expected: --uninstall)" >&2
+  exit 64
 fi
-SUDOERS_LINE="${SUDO_USER} ALL=(root) NOPASSWD: /usr/sbin/ufw"
 
-# Write the rule only if the file is absent or differs, so we never clobber an
-# existing file the operator may have edited manually.
-if [[ -f "${SUDOERS_FILE}" ]]; then
-  if grep -qF -- "${SUDOERS_LINE}" "${SUDOERS_FILE}"; then
-    echo "Rule already present in ${SUDOERS_FILE}; skipping write."
-  else
-    echo "Updating ${SUDOERS_FILE} (existing file lacks the rule)."
-    echo "${SUDOERS_LINE}" >> "${SUDOERS_FILE}"
+# 1. Helper as a root-owned file (cp semantics — never executed as root bash).
+[[ -f "${HELPER_SRC}" ]] || { echo "Error: ${HELPER_SRC} not found." >&2; exit 1; }
+echo "Installing helper -> ${HELPER_TARGET} (root:root 0755)"
+sudo install -o root -g root -m 0755 "${HELPER_SRC}" "${HELPER_TARGET}"
+
+# 2. Merge the three rules (append only the ones not already present, so manual
+#    edits are preserved).
+sudo mkdir -p /etc/sudoers.d
+for rule in "${RULES[@]}"; do
+  if ! sudo grep -qF -- "${rule}" "${SUDOERS_FILE}" 2>/dev/null; then
+    echo "${rule}" | sudo tee -a "${SUDOERS_FILE}" >/dev/null
   fi
+done
+sudo chown root:root "${SUDOERS_FILE}"
+sudo chmod 0440 "${SUDOERS_FILE}"
+
+# 3. Validate.
+sudo visudo -c -f "${SUDOERS_FILE}"
+sudo visudo -c >/dev/null 2>&1 || echo "Warning: visudo reported system-wide issues — review." >&2
+
+# 4. Functional check.
+echo "Testing: sudo -n ${HELPER_TARGET} status"
+if sudo -n "${HELPER_TARGET}" status >/dev/null 2>&1; then
+  echo "OK — helper reachable without a password."
 else
-  echo "Creating ${SUDOERS_FILE}."
-  echo "${SUDOERS_LINE}" > "${SUDOERS_FILE}"
-fi
-
-# sudoers files must be root:root 0440 — otherwise visudo/sudo warn ("world-
-# writable" / bad permissions) on every subsequent run. Set it explicitly.
-echo "Setting permissions root:root 0440 on ${SUDOERS_FILE}."
-chown root:root "${SUDOERS_FILE}"
-chmod 0440 "${SUDOERS_FILE}"
-
-# Validate the resulting sudoers file (catches syntax errors before they lock
-# sudo out). A failed validation exits non-zero and shows the offending line.
-echo "Validating sudoers syntax…"
-visudo -c -f "${SUDOERS_FILE}"
-visudo -c >/dev/null 2>&1 || { echo "visudo reported system-wide issues — review." >&2; }
-
-# Functional check: the rule should let ufw run without a password prompt.
-echo "Testing: sudo -n ufw status"
-if sudo -n ufw status >/dev/null 2>&1; then
-  echo "OK — ufw is accessible without a password."
-else
-  echo "Note: 'sudo -n ufw status' still prompted/failed (exit $?)." >&2
-  echo "This means the rule is not active yet or ufw is not configured." >&2
-  echo "start/stop of devwatch services still works — only the automatic" >&2
-  echo "port open/close is skipped (honest status, no failure)." >&2
+  echo "Note: helper status still prompted/failed (exit $?)." >&2
+  echo "Service start/stop still works — only the automatic port open/close" >&2
+  echo "is skipped (honest status, no failure). Review /etc/sudoers.d/." >&2
   exit 1
 fi

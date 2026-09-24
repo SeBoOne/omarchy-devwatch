@@ -40,7 +40,11 @@ import subprocess
 import sys
 import time
 
-UFW = "/usr/sbin/ufw"
+# Firewall access goes through the root-owned helper /usr/local/sbin/devwatch-ufw
+# (NOT /usr/sbin/ufw directly). The NOPASSWD sudo rule only permits that helper
+# for the fixed actions allow|deny|status; the helper itself enforces the port
+# range. This prevents any user process from running arbitrary ufw commands.
+UFW_HELPER = "/usr/local/sbin/devwatch-ufw"
 
 HOME = os.path.expanduser("~")
 CONFIG_PATH = os.path.join(HOME, ".config", "devwatch", "config.json")
@@ -158,17 +162,15 @@ def ufw_result(port, action):
     the state is reported honestly.
     """
     try:
-        # ufw-Syntax: `ufw allow <port>` und `ufw delete allow <port>` — das
-        # `allow`-Schluesselwort darf bei delete NICHT fehlen, sonst antwortet
-        # ufw "Could not find rule" und der Port bleibt offen.
-        if action == "delete":
-            cmd = ["sudo", "-n", UFW, "delete", "allow", str(port)]
-        else:
-            cmd = ["sudo", "-n", UFW, "allow", str(port)]
+        # Route through the root-owned helper: allow = open ONE port, delete =
+        # close. The helper enforces the numeric port range, so the NOPASSWD
+        # grant cannot be abused to run arbitrary ufw commands.
+        action_h = "deny" if action == "delete" else "allow"
+        cmd = ["sudo", "-n", UFW_HELPER, action_h, str(port)]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if res.returncode == 0:
             return True, "ufw ok"
-        err = (res.stderr or res.stdout).strip()
+        err = (res.stderr or res.stdout).strip() or f"helper exit {res.returncode}"
         return False, f"ufw error ({res.returncode}): {err}"
     except (OSError, subprocess.TimeoutExpired) as e:
         return False, f"ufw error: {e}"
@@ -181,7 +183,7 @@ def ufw_allowed(port):
     (no NOPASSWD). Errors are never raised.
     """
     try:
-        res = subprocess.run(["sudo", "-n", UFW, "status", "numbered"],
+        res = subprocess.run(["sudo", "-n", UFW_HELPER, "status"],
                              capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired) as e:
         return None, f"ufw status error: {e}"

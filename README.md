@@ -21,7 +21,7 @@ omarchy plugin disable sebo.devwatch      # keeps files, just hides the widget
 
 # If you set up the optional UFW rule, remove it BEFORE uninstalling
 # (Omarchy has no post-remove hook, so this is a manual step):
-sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh --uninstall
+bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh --uninstall
 omarchy plugin remove sebo.devwatch       # uninstall (removes the plugin folder)
 ```
 
@@ -53,9 +53,10 @@ Place a `.devservices.json` in the project folder (e.g. `~/Projects/<projekt>/`)
   (`.devwatch-<name>.log`). Stop via SIGTERM, verifies PID identity (/proc start
   time) before killing, escalates to SIGKILL after 6 s.
 - `port`: optional TCP check (IPv4 + IPv6) shown as an health indicator.
-- `firewall`: optional field (only applies when `port` is set). On start runs
-  `sudo -n ufw allow <port>`, on stop `sudo -n ufw delete allow <port>`. Needs a
-  NOPASSWD sudo rule (see `scripts/setup-ufw-sudoers.sh`). If permission is
+- `firewall`: optional field (only applies when `port` is set). On start opens
+  the port via the root-owned helper `sudo -n /usr/local/sbin/devwatch-ufw
+  allow <port>`, on stop `… deny <port>`. Needs a narrow NOPASSWD rule covering
+  only that helper (see `scripts/setup-ufw-sudoers.sh`). If permission is
   missing, the status reports a real firewall error (`allowed: false`); the
   service still starts/stops, the backend does NOT abort.
 
@@ -173,29 +174,35 @@ status simply does not report a firewall rule. No error is shown.
 ### Enable it
 
 1. UFW is part of the Omarchy base installation, so nothing needs installing.
-2. Since the Omarchy bar cannot type a password, DevWatch calls `ufw` via
-   `sudo -n`. That needs a narrow NOPASSWD rule limited to `ufw` only. Run the
-   setup once as root:
+2. Since the Omarchy bar cannot type a password, DevWatch calls a small
+   **root-owned helper** (`/usr/local/sbin/devwatch-ufw`) via `sudo -n`. The
+   NOPASSWD rule covers ONLY that helper — never `/usr/sbin/ufw` itself — so no
+   process can run `ufw disable`, `ufw reset` or arbitrary rules.
 
    These scripts live in the installed plugin folder, so call the setup script
-   with its full path (no need to cd anywhere):
+   with its full path (no need to cd anywhere). **Run it as your normal user**
+   — it performs each privileged step with its own `sudo` internally:
 
    ```bash
-   sudo bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh
+   bash ~/.config/omarchy/plugins/sebo.devwatch/scripts/setup-ufw-sudoers.sh
    ```
 
-   The script writes `/etc/sudoers.d/devwatch-ufw` with the single rule
-   `sebo ALL=(root) NOPASSWD: /usr/sbin/ufw` (your user instead of `sebo`),
-   then chmods it to root:root 0440, validates it with `visudo -c`, and runs a
-   `sudo -n ufw status` check. It never creates a blanket NOPASSWD rule.
+   This installs the helper `root:root 0755` (via `sudo install`, never
+   executed as root), writes `/etc/sudoers.d/devwatch-ufw` with exactly three
+   rules for the helper actions `status` / `allow` / `deny`, sets `root:root
+   0440`, validates with `visudo -c`, and runs a `sudo -n …/devwatch-ufw
+   status` check. It never creates a blanket NOPASSWD rule.
+
+   The port you attach to a service is additionally range-checked (1–65535)
+   inside the helper, so the effective privilege is precisely "open or close
+   exactly one port" plus read-only status.
 
 3. That's it. Services with `"firewall": true` + `port` now open/close their
    port automatically. Verify with `ufw status` after a start/stop.
 
-Security note: the sudo rule is deliberately limited to the single command
-`/usr/sbin/ufw` — it cannot be used to run arbitrary commands. If you prefer to
-not grant this, simply leave the firewall field off: everything else keeps
-working.
+Security note: the sudo rule can only invoke the hardened helper for the fixed
+actions above — it cannot run arbitrary ufw commands. If you prefer not to
+grant this, simply leave the firewall field off: everything else keeps working.
 
 To remove the rule again (e.g. before uninstalling the plugin), run the setup
 script with `--uninstall`; see the removal command in the
