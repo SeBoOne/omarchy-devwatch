@@ -5,6 +5,7 @@ __pycache__/
 
 # Lokale Arbeitsnotizen / Pläne (Repository-spezifisch, nicht öffentlich)
 .hermes-plan.md
+IDEA.md
 
 # Editor / System
 *.swp
