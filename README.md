@@ -162,10 +162,11 @@ python3 scripts/devwatch.py groupstop  <project>  # stop only the running ones o
 ## Firewall support (optional)
 
 The `"firewall": true` field on a service (only applies when `port` is set)
-opens the port via UFW on start and closes it again on stop:
+opens the port via UFW on start and closes it again on stop. DevWatch does so
+through the root-owned helper `/usr/local/sbin/devwatch-ufw` (see below):
 
-- On start:  `sudo -n ufw allow <port>` (before the process starts)
-- On stop:   `sudo -n ufw delete allow <port>` (after the process ended)
+- On start:  `sudo -n /usr/local/sbin/devwatch-ufw allow <port>` (before the process starts)
+- On stop:   `sudo -n /usr/local/sbin/devwatch-ufw deny <port>` (after the process ended)
 
 **This is fully optional.** Without the firewall setup the services still start
 and stop normally — only the automatic UFW port open/close is skipped, and the
