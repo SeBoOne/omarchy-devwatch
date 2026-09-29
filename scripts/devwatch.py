@@ -450,7 +450,13 @@ def do_start(proj_path, svc):
             print(f"Service '{svc.get('name')}': missing 'command' for type cmd.", file=sys.stderr)
             return False
         logfile = project_path(proj_path, f".devwatch-{svc.get('name','x')}.log", f".devwatch-{svc.get('name','x')}.log")
-        with open(logfile, "ab") as log:
+        # O_NOFOLLOW: never follow a symlinked logfile outside the project.
+        try:
+            lfd = os.open(logfile, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
+        except OSError as e:
+            print(f"do_start: cannot open log {logfile}: {e}", file=sys.stderr)
+            return False
+        with os.fdopen(lfd, "ab") as log:
             proc = subprocess.Popen(cmd_str, shell=True, cwd=proj_path,
                                     stdout=log, stderr=subprocess.STDOUT,
                                     start_new_session=True)
@@ -464,10 +470,11 @@ def do_start(proj_path, svc):
 def project_path(proj_path, cfg_path, default):
     """Resolve a service-configured file path safely inside the project dir.
 
-    Guards H-1 (path traversal / symlink): os.path.join would let an absolute
-    'pidfile' escape proj_path entirely, and '..' parts could write/remove files
-    anywhere. We force the result to live under proj_path and reject symlinks
-    (open follows links by default) by never pointing at one.
+    Guards H-1 (path traversal / symlink escape): os.path.join would let an
+    absolute 'pidfile' escape proj_path entirely, and '..' parts could
+    write/remove files anywhere. We force the result to live under proj_path
+    and additionally resolve symlinks (realpath) so a symlink pointing outside
+    the project is rejected, not silently followed on write.
     """
     try:
         src = str(cfg_path).strip() if cfg_path else ""
@@ -478,6 +485,16 @@ def project_path(proj_path, cfg_path, default):
         proj_norm = os.path.normpath(proj_path)
         if not joined.startswith(proj_norm + os.sep) and joined != proj_norm:
             print(f"config: path '{src}' escapes project dir; using default.", file=sys.stderr)
+            return os.path.join(proj_path, default)
+        # Reject a symlink that resolves outside the project (a symlinked
+        # pidfile would otherwise let a write truncate an unrelated file).
+        try:
+            real = os.path.realpath(joined)
+        except OSError:
+            real = joined
+        real_proj = os.path.realpath(proj_norm)
+        if not real.startswith(real_proj + os.sep) and real != real_proj:
+            print(f"config: path '{src}' resolves outside project dir; using default.", file=sys.stderr)
             return os.path.join(proj_path, default)
         return joined
     except Exception:
@@ -506,8 +523,16 @@ def write_pidfile(pidfile, pid, start_time=None):
     """Write pid + start_time so a later stop can prove process identity."""
     if start_time is None:
         start_time = proc_start_time(pid)
-    with open(pidfile, "w") as f:
+    # O_NOFOLLOW: never follow a symlink -- a project-owned symlinked pidfile
+    # must not let this write truncate some other file.
+    try:
+        fd = os.open(pidfile, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+    except OSError as e:
+        print(f"write_pidfile: cannot open {pidfile}: {e}", file=sys.stderr)
+        return False
+    with os.fdopen(fd, "w") as f:
         f.write(f"{pid}\n{start_time if start_time is not None else ''}\n")
+    return True
 
 
 def proc_alive_with_identity(pid, start_time):
