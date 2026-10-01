@@ -52,13 +52,19 @@ Place a `.devservices.json` in the project folder (e.g. `~/Projects/<projekt>/`)
 - `cmd`: runs the command in its own session, PID + log file in the project
   (`.devwatch-<name>.log`). Stop via SIGTERM, verifies PID identity (/proc start
   time) before killing, escalates to SIGKILL after 6 s.
+  **Note:** the recorded PID is that of the command's shell wrapper. If your
+  command backgrounds itself (trailing `&`) or execs into a child that keeps
+  running, the tracked PID can exit early — if the service also has a `port`,
+  DevWatch adopts the real listener and stays correct; otherwise prefer `type:
+  compose`/`systemd` or a foreground command.
 - `port`: optional TCP check (IPv4 + IPv6) shown as an health indicator.
 - `firewall`: optional field (only applies when `port` is set). On start opens
   the port via the root-owned helper `sudo -n /usr/local/sbin/devwatch-ufw
   allow <port>`, on stop `… deny <port>`. Needs a narrow NOPASSWD rule covering
-  only that helper (see `scripts/setup-ufw-sudoers.sh`). If permission is
-  missing, the status reports a real firewall error (`allowed: false`); the
-  service still starts/stops, the backend does NOT abort.
+  only that helper (see `scripts/setup-ufw-sudoers.sh`). If the rule is missing
+  or another permission error occurs, the status reports `allowed: null` and the
+  short hint `ufw not set up`; the service still starts/stops, the backend does
+  NOT abort.
 
 ## Grouping
 
@@ -105,7 +111,8 @@ folders via a small config:
 ```
 
 - Every entry is expanded for **`~/` tilde** and **`${VAR}` environment
-  variables**; relative/absolute paths work too.
+  variables**. Prefer `~/`, `${VAR}` or absolute paths — a bare relative path is
+  resolved against the widget's own working directory, which is not stable.
 - Every **subdirectory** of a scan path that contains a `.devservices.json`
   appears in the widget (same as `~/Projects/`).
 - **Important:** invalid entries (typos, non-existent folders, empty strings)
@@ -202,8 +209,12 @@ status simply does not report a firewall rule. No error is shown.
    port automatically. Verify with `ufw status` after a start/stop.
 
 Security note: the sudo rule can only invoke the hardened helper for the fixed
-actions above — it cannot run arbitrary ufw commands. If you prefer not to
-grant this, simply leave the firewall field off: everything else keeps working.
+actions above — it cannot run arbitrary ufw commands. Be aware of two nuances:
+(1) any process with your user rights can call the helper for **any** single
+port 1–65535, so the effective grant is "open/close one firewall port", not
+"only DevWatch's ports"; (2) `ufw allow <port>` without a protocol opens the
+port for **both TCP and UDP**. If you prefer not to grant this, simply leave
+the firewall field off: everything else keeps working.
 
 To remove the rule again (e.g. before uninstalling the plugin), run the setup
 script with `--uninstall`; see the removal command in the

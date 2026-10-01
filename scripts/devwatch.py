@@ -228,7 +228,7 @@ def ufw_allowed(port):
         err = (res.stderr or res.stdout).strip()
         return None, f"ufw status error ({res.returncode}): {err}"
     # ufw 'status numbered' prints the port as its own token (maybe with /proto):
-        # "[ 1] 8090/tcp  ALLOW IN  Anywhere" or "[ 1] 8090  ALLOW ...".
+    #   "[ 1] 8090/tcp  ALLOW IN  Anywhere" or "[ 1] 8090  ALLOW ...".
     # NOT with a leading colon (that is ss :port syntax) — the port would never
     # match and stay shown as 'fw ✕' even when open.
     p = str(port)
@@ -253,14 +253,15 @@ def compose_ps(proj_path, svc):
     substrings against the human table — a service named 'api' must not match
     container 'my-api-web'.
     """
+    env = dict(os.environ)
+    env.pop("DOCKER_CONFIG", None)  # inherit: never force "" (W2)
     cmd = ["docker", "compose"]
     if svc.get("file"):
         cmd += ["-f", os.path.join(proj_path, svc["file"])]
     cmd += ["ps", "--format", "json"]
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
-                             cwd=proj_path,
-                             env={**os.environ, "DOCKER_CONFIG": os.environ.get("DOCKER_CONFIG", "")})
+                             cwd=proj_path, env=env)
     except (OSError, subprocess.TimeoutExpired) as e:
         return [], f"docker compose error: {e}"
     if res.returncode != 0:
@@ -396,11 +397,19 @@ def resolve(projects, pname, sname):
 
 def do_start(proj_path, svc):
     stype = svc.get("type")
-    # Open the firewall port before start (never crash, log errors).
-    if firewalls(svc):
+    # Open the firewall port before start (never crash, log errors). Track it so
+    # we roll it back if the start fails afterwards (W1: no open port without a
+    # running service).
+    fw = firewalls(svc)
+    if fw:
         ok, detail = ufw_result(svc["port"], "allow")
         if not ok:
             print(detail, file=sys.stderr)
+
+    def rollback_fw():
+        if fw:
+            ufw_result(svc["port"], "delete")  # best-effort, never crash
+
     if stype == "compose":
         cmd = ["docker", "compose"]
         if svc.get("file"):
@@ -409,17 +418,23 @@ def do_start(proj_path, svc):
         if svc.get("detached", True):
             cmd.append("-d")
         try:
-            return subprocess.run(cmd, cwd=proj_path, timeout=60).returncode == 0
+            ok = subprocess.run(cmd, cwd=proj_path, timeout=60).returncode == 0
         except subprocess.TimeoutExpired:
             print("docker compose up timed out.", file=sys.stderr)
-            return False
+            ok = False
+        if not ok:
+            rollback_fw()
+        return ok
     if stype == "systemd":
         try:
-            return subprocess.run(["systemctl", "--user", "start", svc.get("unit", "")],
-                                  timeout=30).returncode == 0
+            ok = subprocess.run(["systemctl", "--user", "start", svc.get("unit", "")],
+                                timeout=30).returncode == 0
         except subprocess.TimeoutExpired:
             print("systemctl start timed out.", file=sys.stderr)
-            return False
+            ok = False
+        if not ok:
+            rollback_fw()
+        return ok
     if stype == "cmd":
         pidfile = project_path(proj_path, svc.get("pidfile"), f".devwatch-{svc.get('name','x')}.pid")
         port = svc.get("port")
@@ -433,6 +448,7 @@ def do_start(proj_path, svc):
                 print(f"Port {port} already in use — adopted process {pid}.", file=sys.stderr)
                 return True
             print(f"Port {port} in use, owner not identifiable.", file=sys.stderr)
+            rollback_fw()
             return False
         # Already running? (pidfile has two lines now: pid + start_time; only
         # treat as running if the recorded start time still matches, so a stale
@@ -448,6 +464,7 @@ def do_start(proj_path, svc):
         cmd_str = svc.get("command", "")
         if not cmd_str:
             print(f"Service '{svc.get('name')}': missing 'command' for type cmd.", file=sys.stderr)
+            rollback_fw()
             return False
         logfile = project_path(proj_path, f".devwatch-{svc.get('name','x')}.log", f".devwatch-{svc.get('name','x')}.log")
         # O_NOFOLLOW: never follow a symlinked logfile outside the project.
@@ -455,6 +472,7 @@ def do_start(proj_path, svc):
             lfd = os.open(logfile, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
         except OSError as e:
             print(f"do_start: cannot open log {logfile}: {e}", file=sys.stderr)
+            rollback_fw()
             return False
         with os.fdopen(lfd, "ab") as log:
             proc = subprocess.Popen(cmd_str, shell=True, cwd=proj_path,
@@ -462,8 +480,19 @@ def do_start(proj_path, svc):
                                     start_new_session=True)
         write_pidfile(pidfile, proc.pid)
         time.sleep(0.3)
-        return proc.poll() is None
+        if proc.poll() is not None:
+            # Process died within the grace window — remove the stale pidfile
+            # (H9) and take the firewall rule back.
+            try:
+                os.remove(pidfile)
+            except OSError:
+                pass
+            print(f"Service exited immediately after start.", file=sys.stderr)
+            rollback_fw()
+            return False
+        return True
     print(f"Start not supported for type: {stype}", file=sys.stderr)
+    rollback_fw()
     return False
 
 
@@ -595,8 +624,16 @@ def do_stop(proj_path, svc):
                 else:
                     try:
                         os.kill(pid, signal.SIGKILL)
-                    except (ProcessLookupError, PermissionError):
+                    except ProcessLookupError:
                         pass
+                    except PermissionError:
+                        # Process changed owner (setuid) — we can no longer kill
+                        # it. Report FAILURE and KEEP the pidfile so the state is
+                        # honest and a retry is possible (W3).
+                        print(f"Cannot SIGKILL pid {pid} (no permission).", file=sys.stderr)
+                        ok = False
+                        return ok
+                # Process is gone (SIGTERM or SIGKILL succeeded): clear pidfile.
                 try:
                     os.remove(pidfile)
                 except OSError:

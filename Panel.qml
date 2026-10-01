@@ -31,6 +31,11 @@ Panel {
   property bool busy: false
   // Confirm state for stop: "project/service" or "".
   property string confirmTarget: ""
+  // W4: remember the exact confirmed action so a second Enter/click runs that
+  // action regardless of what a status poll changed groupState to in between
+  // (a "stop" confirm must not flip into "start" because the state moved "mix"→"off").
+  property string confirmAction: ""
+  function resetConfirm() { root.confirmTarget = ""; root.confirmAction = "" }
   // Keyboard focus (own declaration, robust against base changes).
   property bool cursorActive: false
   property int focusedIndex: 0
@@ -40,14 +45,16 @@ Panel {
   readonly property var projects: snapshot ? (snapshot.projects || []) : []
 
   // Warnings from config (invalid/missing scan_paths), surfaced by the backend
-  // im status-Snapshot unter config_warnings geliefert.
+  // in the status snapshot under config_warnings.
   readonly property var configWarnings: snapshot ? (snapshot.config_warnings || []) : []
 
   // Flatten for keyboard nav: [{project, path, svc}] entries, plus groups:
   // [{project, path, group:{name, services}}] when a project is grouped.
   // In Group drill-down (drillProject set) only the group's services are listed.
   property string drillProject: ""
-  readonly property string drillName: drillProject ? (root.projects[drillProject].group ? root.projects[drillProject].group.name : "") : ""
+  // Guarded against a project dropping out of a refresh (H5) — never index an
+  // undefined project.
+  readonly property string drillName: drillProject ? ((root.projects[drillProject]?.group?.name) ?? "") : ""
 
   readonly property var rows: {
     var out = []
@@ -99,6 +106,7 @@ Panel {
 
   function refresh() {
     if (root.busy) return
+    if (root.statusProcess.running) return  // H6: never start a poll over a live one
     loading = true
     statusProcess.command = ["python3", backendPath(), "status"]
     statusProcess.running = true
@@ -107,9 +115,9 @@ Panel {
   function action(kind, project, svcName) {
     if (root.busy) return
     root.busy = true
-    root.confirmTarget = ""
-    // svcName nur anhaengen, wenn gesetzt — groupstart/groupstop erwarten
-    // genau 2 Argumente (kein trailing undefined, sonst Usage-exit: "nichts passiert").
+    root.resetConfirm()
+    // Append svcName only when set — groupstart/groupstop expect exactly
+    // 2 args (no trailing undefined, else a usage-exit: "nothing happens").
     var cmd = ["python3", backendPath(), kind, project]
     if (svcName && String(svcName) !== "") cmd.push(svcName)
     actionProcess.command = cmd
@@ -308,21 +316,25 @@ Panel {
         // Group row in the overview: Enter = switch (start/stop-flow).
         if (root.drillProject === "" && row.group) {
           var pk = row.project
-          if (root.groupState(pk) !== "off") {
-            root.confirmTarget = root.confirmTarget === pk ? "" : pk
-            if (root.confirmTarget === "") root.action("groupstop", pk)
+          // W4: if this group is already armed for groupstop, run exactly that
+          // regardless of a status poll having moved groupState (mix→off) since.
+          if (root.confirmTarget === pk && root.confirmAction === "groupstop") {
+            root.action("groupstop", pk); root.resetConfirm()
+          } else if (root.groupState(pk) !== "off") {
+            root.confirmTarget = pk; root.confirmAction = "groupstop"
           } else {
-            root.action("groupstart", pk)
+            root.resetConfirm(); root.action("groupstart", pk)
           }
           return
         }
         if (!row.svc) return
         var key = row.project + "/" + row.svc.name
-        if (row.svc.running === true) {
-          if (root.confirmTarget === key) { root.action("stop", row.project, row.svc.name); root.confirmTarget = "" }
-          else root.confirmTarget = key
+        if (root.confirmTarget === key && root.confirmAction === "stop") {
+          root.action("stop", row.project, row.svc.name); root.resetConfirm()
+        } else if (row.svc.running === true) {
+          root.confirmTarget = key; root.confirmAction = "stop"
         } else {
-          root.action("start", row.project, row.svc.name)
+          root.resetConfirm(); root.action("start", row.project, row.svc.name)
         }
       }
 
@@ -412,6 +424,7 @@ Panel {
               return "No services found.\nCreate a .devservices.json in the project."
             }
             color: root.configWarnings.length > 0 ? root.errColor : root.dim
+            textFormat: Text.PlainText
             font.family: root.fontFamily
             font.pixelSize: Style.font.body
             horizontalAlignment: Text.AlignHCenter
@@ -464,27 +477,27 @@ Panel {
                     }
                     return
                   }
-                  // Linksklick
+                  // Left click: group row = 2-click stop flow, single click start.
                   if (row.isGroupRow) {
                     var pk = modelData.project
-                    // Misch- oder All-Laufend: 2×-Flow stoppt alle AKTIVEN.
-                    if (root.groupState(pk) !== "off") {
-                      if (root.confirmTarget === pk) root.action("groupstop", pk)
-                      else root.confirmTarget = pk
+                    // W4: armed groupstop runs even if a poll moved the state since.
+                    if (root.confirmTarget === pk && root.confirmAction === "groupstop") {
+                      root.action("groupstop", pk); root.resetConfirm()
+                    } else if (root.groupState(pk) !== "off") {
+                      root.confirmTarget = pk; root.confirmAction = "groupstop"
                     } else {
-                      root.action("groupstart", pk)
+                      root.resetConfirm(); root.action("groupstart", pk)
                     }
                     return
                   }
-                  // Einzeldienst (auch im Drill-Down): 1× start, 2× stop.
+                  // Single service (also in drill-down): 1× start, 2× stop.
                   var key = modelData.project + "/" + modelData.svc.name
-                  if (modelData.svc.running === true) {
-                    if (root.confirmTarget === key)
-                      root.action("stop", modelData.project, modelData.svc.name)
-                    else
-                      root.confirmTarget = key
+                  if (root.confirmTarget === key && root.confirmAction === "stop") {
+                    root.action("stop", modelData.project, modelData.svc.name); root.resetConfirm()
+                  } else if (modelData.svc.running === true) {
+                    root.confirmTarget = key; root.confirmAction = "stop"
                   } else {
-                    root.action("start", modelData.project, modelData.svc.name)
+                    root.resetConfirm(); root.action("start", modelData.project, modelData.svc.name)
                   }
                 }
               }
@@ -554,7 +567,7 @@ Panel {
                       if (modelData.svc.detail) parts.push(modelData.svc.detail)
                       if (modelData.svc.port) parts.push(":" + modelData.svc.port + (modelData.svc.port_open === true ? " ✓" : " ✗"))
                       if (modelData.svc.firewall === true) {
-                        // Fehlendem sudo/Firewall-Fehler: ehrlichen Detailtext zeigen.
+                        // Missing sudo / firewall error: show honest detail text.
                         if (modelData.svc.fw_detail)
                           parts.push(modelData.svc.fw_detail)
                         else
@@ -564,6 +577,7 @@ Panel {
                       return parts.join(" · ")
                     }
                     color: root.dim
+                    textFormat: Text.PlainText
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.caption
                     elide: Text.ElideRight

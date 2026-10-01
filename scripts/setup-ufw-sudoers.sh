@@ -35,10 +35,11 @@ fi
 
 TARGET_USER="$(id -un)"
 
-# Exactly three helper actions; sudoers Cmnd-masking prevents any other command
-# line from matching. The helper additionally enforces the port range, so the
-# effective privilege is 'open/close exactly one TCP|UDP port' plus read-only
-# status — nothing else.
+# Exactly three helper actions. sudoers Cmnd-masking is only a coarse pattern
+# ('[0-9]*' matches any token beginning with a digit, e.g. 'allow 1abc'); the
+# helper's own strict numeric-port validation is the real authority, so the
+# effective privilege is 'open/close exactly one valid TCP|UDP port' plus
+# read-only status — nothing else.
 RULES=(
   "${TARGET_USER} ALL=(root) NOPASSWD: ${HELPER_TARGET} status"
   "${TARGET_USER} ALL=(root) NOPASSWD: ${HELPER_TARGET} allow [0-9]*"
