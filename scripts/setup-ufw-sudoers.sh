@@ -55,8 +55,18 @@ if [[ "${1:-}" == "--uninstall" ]]; then
       # not over-remove).
       echo "Removing DevWatch helper rules from ${SUDOERS_FILE}."
       sudo sed -i "/NOPASSWD: ${HELPER_TARGET}/d" "${SUDOERS_FILE}"
-      # If nothing remains, drop the now-empty drop-in; otherwise keep it.
-      if [[ -z "$(sudo tr -d '[:space:]' < "${SUDOERS_FILE}")" ]]; then
+      # Determine what remains using a read that ACTUALLY has root access
+      # (sudo cat opens the file as root; a plain '<' redirect would be opened
+      # by the normal user first and fail on the root-owned 0440 file, which
+      # would read as 'empty' and wrongly delete the whole drop-in). Treat a
+      # read error as a failure — never as an empty file.
+      REMAINING=""
+      if ! REMAINING="$(sudo cat "${SUDOERS_FILE}" 2>/dev/null)"; then
+        echo "Error: could not read ${SUDOERS_FILE} as root; NOT removing it." >&2
+        echo "Inspect manually and rerun. Plugin removal is safe regardless." >&2
+        exit 1
+      fi
+      if [[ -z "$(printf '%s' "${REMAINING}" | tr -d '[:space:]')" ]]; then
         sudo rm -f "${SUDOERS_FILE}"
       else
         sudo chown root:root "${SUDOERS_FILE}"
