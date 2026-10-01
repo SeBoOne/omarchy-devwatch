@@ -55,7 +55,12 @@ if [[ "${1:-}" == "--uninstall" ]]; then
       # operator placed in the same drop-in (install appends, uninstall must
       # not over-remove).
       echo "Removing DevWatch helper rules from ${SUDOERS_FILE}."
-      sudo sed -i "/NOPASSWD: ${HELPER_TARGET}/d" "${SUDOERS_FILE}"
+      # Use a sed address with escaped inner slashes: HELPER_TARGET contains '/'
+      # (/usr/local/sbin/devwatch-ufw), which otherwise clashes with the '/'
+      # delimiter and breaks the expression (B-1: reproduced, uninstall always
+      # aborted). Escape the slashes so only the DevWatch helper line is hit.
+      HELPER_ESC="$(printf '%s' "${HELPER_TARGET}" | sed 's:/:\\/:g')"
+      sudo sed -i "/NOPASSWD: ${HELPER_ESC}/d" "${SUDOERS_FILE}"
       # Determine what remains using a read that ACTUALLY has root access
       # (sudo cat opens the file as root; a plain '<' redirect would be opened
       # by the normal user first and fail on the root-owned 0440 file, which

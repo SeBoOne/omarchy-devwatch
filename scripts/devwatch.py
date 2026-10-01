@@ -309,7 +309,12 @@ def svc_status(proj_path, svc):
                    if str(c.get("Service", "")).lower() == name
                    or str(c.get("Name", "")).lower() == name]
             status = (hit[0].get("State") or hit[0].get("Status") or "") if hit else ""
-            out["running"] = bool(hit) and "exit" not in status.lower()
+            # B-3: only explicitly-active states are running. 'created',
+            # 'paused', 'dead' and 'restarting' contain no 'exit' but are NOT
+            # running, so whitelist instead of relying on 'not exited'.
+            active = status.lower()
+            out["running"] = bool(hit) and (
+                active.startswith("running") or active.startswith("up"))
             out["detail"] = status or (f"{len(containers)} Container" if containers else "no containers")
         else:
             out["running"] = bool(containers)
@@ -417,6 +422,12 @@ def do_start(proj_path, svc):
         cmd.append("up")
         if svc.get("detached", True):
             cmd.append("-d")
+        # B-2: start only the declared service when service_name is set — the
+        # same target do_stop uses. Without this, 'up' brings up the whole
+        # compose file, incl. containers not declared in .devservices.json
+        # (asymmetry with do_stop broke the start/stop toggle).
+        if svc.get("service_name"):
+            cmd.append(svc["service_name"])
         try:
             ok = subprocess.run(cmd, cwd=proj_path, timeout=60).returncode == 0
         except subprocess.TimeoutExpired:
